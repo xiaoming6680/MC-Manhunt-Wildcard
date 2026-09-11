@@ -9,14 +9,18 @@
     "WindChargeEntityMixin",
     "PiglinBarterMixin",
     "PlayerDamageMixin",
+    "LivingEntityDamageMixin",
+    "EndGatewayCollisionMixin",
     "PlayerDisplayNameMixin",
     "ServerPlayerListNameMixin",
     "PlayerDropItemMixin",
-    "ItemEntityPickupMixin"
+    "ItemEntityPickupMixin",
+    "LivingEntityWaypointMixin"
   ],
   "client": [
     "client.PlayerListEntrySkinMixin",
-    "client.CameraSinkMixin"
+    "client.CameraSinkMixin",
+    "client.CameraRollMixin"
   ],
   "injectors": {
     "defaultRequire": 1

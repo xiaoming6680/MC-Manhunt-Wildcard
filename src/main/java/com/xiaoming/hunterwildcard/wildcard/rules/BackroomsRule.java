@@ -12,17 +12,17 @@ import net.minecraft.block.BlockState;
 import net.minecraft.entity.effect.StatusEffectInstance;
 import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.registry.RegistryKey;
-import net.minecraft.scoreboard.Scoreboard;
-import net.minecraft.scoreboard.Team;
 import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
+import net.minecraft.sound.SoundEvents;
 import net.minecraft.util.Formatting;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Random;
 
 /**
  * "Backrooms!": everyone drops into the yellow maze. Hunters glow red for a second every twenty
@@ -30,9 +30,8 @@ import java.util.List;
  * floor sends you home; once a whole side is out, the wildcard ends and everyone sinks back.
  */
 public class BackroomsRule implements WildcardRule {
-    private static final String HUNTER_TEAM = "hw_backrooms_hunters";
     private static final int GLOW_INTERVAL_TICKS = 20 * 20;
-    private static final int GLOW_TICKS = 20;
+    private static final int GLOW_TICKS = 100;
     private static final int PLACED_BLOCK_TTL_TICKS = 20 * 10;
     private static final int SIDE_CHECK_INTERVAL_TICKS = 20;
 
@@ -40,7 +39,7 @@ public class BackroomsRule implements WildcardRule {
     private int ticks;
 
     @Override
-    public int getDurationTicks(ModConfig config) {
+    public int getDurationTicks(ModConfig config, Random random) {
         return config.getBackroomsDurationTicks();
     }
 
@@ -48,15 +47,7 @@ public class BackroomsRule implements WildcardRule {
     public void onStart(GameContext context) {
         ticks = 0;
         placedBlocks.clear();
-        Scoreboard scoreboard = context.getServer().getScoreboard();
-        Team team = scoreboard.getTeam(HUNTER_TEAM);
-        if (team == null) {
-            team = scoreboard.addTeam(HUNTER_TEAM);
-        }
-        team.setColor(Formatting.RED);
-        for (ServerPlayerEntity hunter : context.getHunters()) {
-            scoreboard.addScoreHolderToTeam(hunter.getNameForScoreboard(), team);
-        }
+        // Glow colour comes from the round-wide scoreboard teams: hunters red, runners blue.
         BackroomsSession.begin(context);
     }
 
@@ -64,9 +55,11 @@ public class BackroomsRule implements WildcardRule {
     public void onTick(GameContext context, int remainingTicks) {
         ticks++;
         if (ticks % GLOW_INTERVAL_TICKS == 0) {
-            for (ServerPlayerEntity hunter : context.getHunters()) {
-                if (BackroomsDimension.isInBackrooms(hunter)) {
-                    hunter.addStatusEffect(new StatusEffectInstance(StatusEffects.GLOWING, GLOW_TICKS, 0, false, false, false));
+            for (ServerPlayerEntity participant : context.getParticipants()) {
+                if (BackroomsDimension.isInBackrooms(participant)) {
+                    participant.addStatusEffect(new StatusEffectInstance(StatusEffects.GLOWING, GLOW_TICKS, 0, false, false, false));
+                    participant.sendMessage(HunterWildcardText.translatable("msg.wildcard.backrooms.glow", GLOW_TICKS / 20).formatted(Formatting.YELLOW), true);
+                    participant.playSound(SoundEvents.BLOCK_NOTE_BLOCK_BIT.value(), 0.8F, 1.5F);
                 }
             }
         }
@@ -91,6 +84,7 @@ public class BackroomsRule implements WildcardRule {
                 context.getServer().getPlayerManager().broadcast(
                         HunterWildcardText.prefixed(HunterWildcardText.translatable("msg.wildcard.backrooms.side_out")), false);
                 GameManager.getInstance().requestWildcardStop();
+                ticks = 0; // stop is applied after this tick; don't spam the message meanwhile
             }
         }
     }
@@ -111,11 +105,6 @@ public class BackroomsRule implements WildcardRule {
             }
         }
         placedBlocks.clear();
-        Scoreboard scoreboard = context.getServer().getScoreboard();
-        Team team = scoreboard.getTeam(HUNTER_TEAM);
-        if (team != null) {
-            scoreboard.removeTeam(team);
-        }
         BackroomsSession.end(context);
     }
 

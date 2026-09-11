@@ -2,6 +2,7 @@ package com.xiaoming.hunterwildcard.client;
 
 import com.xiaoming.hunterwildcard.game.GameState;
 import com.xiaoming.hunterwildcard.network.HunterWildcardPackets.ConfigSnapshot;
+import com.xiaoming.hunterwildcard.wildcard.WildcardIds;
 import com.xiaoming.hunterwildcard.network.HunterWildcardPackets.SyncConfigPayload;
 
 /**
@@ -52,16 +53,9 @@ public final class ClientGameStatus {
     }
 
     public static int enabledWildcardCount(ConfigSnapshot config) {
-        boolean[] flags = {
-                config.enableSpeedRush(), config.enableFeatherweight(), config.enableGlowing(), config.enableNightHunt(),
-                config.enableExplosiveDeath(), config.enableSupplyDrop(), config.enableHunterRadar(), config.enableCompassChaos(),
-                config.enableHungerChase(), config.enableWeaponOverheat(), config.enableLightLoad(), config.enableBlockDecay(),
-                config.enablePearlFrenzy(), config.enableWindChargeBrawl(), config.enableBloodRage(), config.enableKeyScramble(),
-                config.enableTinyPlayers(), config.enableFragile(), config.enableWhoAreYou(), config.enableStayAway(), config.enableBackrooms(), config.enableDisabledWildcard()
-        };
         int count = 0;
-        for (boolean flag : flags) {
-            if (flag) {
+        for (String id : WildcardIds.ALL) {
+            if (config.enabledWildcards().getOrDefault(id, Boolean.TRUE)) {
                 count++;
             }
         }
@@ -69,6 +63,6 @@ public final class ClientGameStatus {
     }
 
     public static int totalWildcardCount() {
-        return 22;
+        return WildcardIds.ALL.size();
     }
 }

@@ -1,5 +1,6 @@
 package com.xiaoming.hunterwildcard.mixin;
 
+import com.xiaoming.hunterwildcard.game.GameManager;
 import com.xiaoming.hunterwildcard.wildcard.rules.StayAwayRule;
 import net.minecraft.entity.ItemEntity;
 import net.minecraft.item.ItemStack;
@@ -27,5 +28,15 @@ public class PlayerDropItemMixin {
             player.setStackInHand(player.getActiveHand(), stack.copy());
         }
         cir.setReturnValue(null);
+    }
+
+    @Inject(method = "dropItem(Lnet/minecraft/item/ItemStack;ZZ)Lnet/minecraft/entity/ItemEntity;", at = @At("RETURN"))
+    private void hunterwildcard$afterDrop(ItemStack stack, boolean throwRandomly, boolean retainOwnership, CallbackInfoReturnable<ItemEntity> cir) {
+        ItemEntity item = cir.getReturnValue();
+        ServerPlayerEntity player = (ServerPlayerEntity) (Object) this;
+        // Death drops also pass through here; only living players count as "throwing" something.
+        if (item != null && player.isAlive()) {
+            GameManager.getInstance().handleItemDropped(player, item);
+        }
     }
 }

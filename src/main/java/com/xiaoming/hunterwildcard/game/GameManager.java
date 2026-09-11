@@ -21,6 +21,7 @@ import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
+import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.block.BlockState;
@@ -29,6 +30,8 @@ import net.minecraft.component.type.FireworkExplosionComponent;
 import net.minecraft.component.type.FireworksComponent;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.effect.StatusEffectInstance;
+import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.boss.dragon.EnderDragonEntity;
 import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.entity.effect.StatusEffects;
@@ -45,6 +48,7 @@ import net.minecraft.util.Formatting;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.GameMode;
 import net.minecraft.world.rule.GameRules;
 import it.unimi.dsi.fastutil.ints.IntList;
 
@@ -59,7 +63,10 @@ import java.util.UUID;
 
 public class GameManager {
     private static final GameManager INSTANCE = new GameManager();
+    private static final int LOBBY_GLOW_REFRESH_TICKS = 20;
+    private int lobbyGlowTicks;
     private static final int STATUS_SYNC_INTERVAL_TICKS = 20;
+    private static final int ROLE_ACTIONBAR_TICKS = 20 * 15;
 
     private final ModConfig config = ModConfig.load();
     private final TeamManager teamManager = new TeamManager();
@@ -80,10 +87,15 @@ public class GameManager {
     private int preparingTicks;
     private int endingTicks;
     private int actionBarTicks;
+    private int runningTicks;
     private int statusSyncTicks;
     private boolean eventsRegistered;
     private UUID wildcardTestPlayerUuid;
     private Boolean previousLocatorBarRule;
+    private Boolean previousKeepInventoryRule;
+    /** Players without a side who were put into spectator mode for the round, with the mode to restore. */
+    private final Map<UUID, GameMode> forcedSpectators = new HashMap<>();
+    private int ruleEnforceTicks;
 
     private GameManager() {
     }
@@ -100,7 +112,7 @@ public class GameManager {
 
         ServerTickEvents.END_SERVER_TICK.register(this::tick);
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> handleDisconnect(handler.player));
-        ServerPlayConnectionEvents.JOIN.register((handler, sender, joinedServer) -> HunterWildcardPackets.sendSync(handler.player));
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, joinedServer) -> handleJoin(handler.player, joinedServer));
         ServerLivingEntityEvents.AFTER_DEATH.register((entity, damageSource) -> {
             if (entity instanceof ServerPlayerEntity player) {
                 handlePlayerDeath(player, damageSource);
@@ -116,6 +128,9 @@ public class GameManager {
             if (entity instanceof ServerPlayerEntity player && damageTaken > 0.0F && !blocked) {
                 handlePlayerDamaged(player, damageSource, damageTaken);
             }
+            if (damageTaken > 0.0F && !blocked && damageSource.getAttacker() instanceof ServerPlayerEntity attacker && attacker != entity) {
+                handleDamageDealt(attacker, entity, damageTaken);
+            }
         });
         AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
             if (!world.isClient() && player instanceof ServerPlayerEntity serverPlayer) {
@@ -128,6 +143,11 @@ public class GameManager {
                 handleItemUse(serverPlayer, hand, player.getStackInHand(hand));
             }
             return ActionResult.PASS;
+        });
+        PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, blockEntity) -> {
+            if (world instanceof ServerWorld serverWorld && player instanceof ServerPlayerEntity serverPlayer) {
+                handleBlockBroken(serverPlayer, serverWorld, pos, state);
+            }
         });
         ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) -> handleAfterRespawn(newPlayer));
         ServerLifecycleEvents.SERVER_STOPPING.register(this::handleServerStopping);
@@ -149,11 +169,16 @@ public class GameManager {
             wildcardManager.clear(debugContext(server));
             wildcardTestPlayerUuid = null;
         }
+        clearLobbyGlow(server);
         state = GameState.PREPARING;
         preparingTicks = config.getPreparingTicks();
         endingTicks = 0;
         actionBarTicks = 0;
-        disableLocatorBarForRound(server);
+        ruleEnforceTicks = 0;
+        teamManager.syncScoreboardTeams(server);
+        applyLocatorBarForRound(server);
+        takeOverKeepInventory(server);
+        forceSpectatorsForRound(server);
         wildcardManager.reset();
         respawnManager.clear();
         winConditionManager.clear();
@@ -195,6 +220,7 @@ public class GameManager {
         }
 
         PlayerRole oldRole = teamManager.leave(player);
+        player.removeStatusEffect(StatusEffects.GLOWING);
         respawnManager.remove(player);
         hunterBoundaryManager.remove(player);
         compassTracker.removeCompass(player);
@@ -357,14 +383,9 @@ public class GameManager {
 
     /** Lets a running rule end itself early (used by the Backrooms once a whole side is out). */
     public void requestWildcardStop() {
-        if (server == null) {
-            return;
-        }
-        GameContext stopContext = state == GameState.RUNNING ? context() : debugContext(server);
-        if (wildcardManager.stopActiveRule(stopContext)) {
-            wildcardTestPlayerUuid = state == GameState.RUNNING ? wildcardTestPlayerUuid : null;
-            HunterWildcardPackets.syncAll(server);
-        }
+        // Applied by WildcardManager after the current rule tick; stopping synchronously from inside
+        // a rule's onTick nulled the active rule mid-tick and crashed the server.
+        wildcardManager.requestStop();
     }
 
     public void debugStopWildcard(ServerCommandSource source) {
@@ -382,6 +403,7 @@ public class GameManager {
         if (state == GameState.WAITING && wildcardManager.hasRuleInProgress()) {
             server = tickServer;
             wildcardManager.tick(debugContext(tickServer));
+            tickLobbyGlow(tickServer);
             statusSyncTicks++;
             if (statusSyncTicks >= STATUS_SYNC_INTERVAL_TICKS) {
                 statusSyncTicks = 0;
@@ -391,6 +413,7 @@ public class GameManager {
         }
 
         if (state == GameState.WAITING) {
+            tickLobbyGlow(tickServer);
             return;
         }
 
@@ -399,6 +422,11 @@ public class GameManager {
         if (statusSyncTicks >= STATUS_SYNC_INTERVAL_TICKS) {
             statusSyncTicks = 0;
             HunterWildcardPackets.syncAll(tickServer);
+        }
+        ruleEnforceTicks++;
+        if (ruleEnforceTicks >= STATUS_SYNC_INTERVAL_TICKS && state != GameState.ENDING) {
+            ruleEnforceTicks = 0;
+            enforceKeepInventory(tickServer);
         }
 
         if (state == GameState.PREPARING) {
@@ -430,6 +458,7 @@ public class GameManager {
     private void startRunning() {
         state = GameState.RUNNING;
         actionBarTicks = 0;
+        runningTicks = 0;
         GameContext context = context();
         hunterBoundaryManager.clear();
         bossBarManager.clearPrepareBar();
@@ -459,8 +488,10 @@ public class GameManager {
             return;
         }
 
+        runningTicks++;
         actionBarTicks--;
-        if (actionBarTicks <= 0) {
+        // The role reminder only runs for the first seconds of the chase; after that the HUD stays quiet.
+        if (actionBarTicks <= 0 && runningTicks <= ROLE_ACTIONBAR_TICKS) {
             actionBarTicks = config.getActionBarIntervalTicks();
             for (ServerPlayerEntity player : context.getParticipants()) {
                 if (respawnManager.isWaitingForRespawn(player)) {
@@ -539,40 +570,123 @@ public class GameManager {
     }
 
     public void handlePlayerDamaged(ServerPlayerEntity player, DamageSource source, float damageTaken) {
+        if (state == GameState.RUNNING && teamManager.isRunner(player)
+                && source.getAttacker() instanceof ServerPlayerEntity attacker && teamManager.isHunter(attacker)) {
+            respawnManager.recordHunterHit(player, attacker);
+        }
+
         GameContext eventContext = wildcardEventContext(player);
         if (eventContext != null) {
             wildcardManager.onPlayerDamaged(eventContext, player, source, damageTaken);
         }
     }
 
-    /** Scales damage dealt by a hunter to a runner by the configured multiplier while a round is running. */
+    /** Scales damage dealt by a hunter to a runner by the configured multiplier while a round is running, then lets the active wildcard rescale it. */
     public float modifyIncomingDamage(ServerPlayerEntity victim, DamageSource source, float amount) {
-        if (state != GameState.RUNNING || amount <= 0.0F) {
+        if (amount <= 0.0F) {
             return amount;
         }
 
-        if (!(source.getAttacker() instanceof ServerPlayerEntity attacker)) {
+        if (state == GameState.RUNNING && source.getAttacker() instanceof ServerPlayerEntity attacker
+                && teamManager.isHunter(attacker) && teamManager.isRunner(victim)) {
+            amount *= config.getHunterDamageMultiplier();
+        }
+
+        return modifyLivingDamage(victim, source, amount);
+    }
+
+    /** Wildcard damage hook for any living victim (players arrive here through {@link #modifyIncomingDamage}). */
+    public float modifyLivingDamage(LivingEntity victim, DamageSource source, float amount) {
+        if (amount <= 0.0F || !wildcardManager.hasRuleInProgress()) {
             return amount;
         }
-
-        if (teamManager.isHunter(attacker) && teamManager.isRunner(victim)) {
-            return amount * config.getHunterDamageMultiplier();
+        ServerPlayerEntity anchor = victim instanceof ServerPlayerEntity victimPlayer
+                ? victimPlayer
+                : source.getAttacker() instanceof ServerPlayerEntity attacker ? attacker : null;
+        if (anchor == null) {
+            return amount;
         }
+        GameContext eventContext = wildcardEventContext(anchor);
+        return eventContext == null ? amount : wildcardManager.modifyDamage(eventContext, victim, source, amount);
+    }
 
-        return amount;
+    public void handleDamageDealt(ServerPlayerEntity attacker, LivingEntity victim, float damageDealt) {
+        GameContext eventContext = wildcardEventContext(attacker);
+        if (eventContext != null) {
+            wildcardManager.onDamageDealt(eventContext, attacker, victim, damageDealt);
+        }
+    }
+
+    public void handleItemDropped(ServerPlayerEntity player, ItemEntity item) {
+        GameContext eventContext = wildcardEventContext(player);
+        if (eventContext != null) {
+            wildcardManager.onItemDropped(eventContext, player, item);
+        }
     }
 
     public void handleItemUse(ServerPlayerEntity player, Hand hand, ItemStack stack) {
+        if (state == GameState.RUNNING && hand == Hand.MAIN_HAND && teamManager.isHunter(player) && compassTracker.isHunterCompass(stack)) {
+            if (player.isSneaking()) {
+                compassTracker.cycleTarget(context(), player);
+            } else {
+                compassTracker.openMenu(context(), player);
+            }
+            return;
+        }
+
         GameContext eventContext = wildcardEventContext(player);
         if (eventContext != null) {
             wildcardManager.onItemUse(eventContext, player, hand, stack);
         }
     }
 
+    /** Compass menu choice from the client; target null means "nearest runner". */
+    public void selectCompassTarget(ServerPlayerEntity player, UUID target) {
+        if (state != GameState.RUNNING || server == null || !teamManager.isHunter(player)) {
+            return;
+        }
+        compassTracker.selectTarget(context(), player, target);
+    }
+
+    /** Applies the live-safe subset of a config mid-round (speeds, targets, wildcards, respawn tuning...). */
+    public void applyLiveConfig(ModConfig newConfig) {
+        config.copyLiveFrom(newConfig);
+        notifyConfigChanged();
+        if (server == null || state == GameState.WAITING) {
+            return;
+        }
+        GameContext context = context();
+        applyLocatorBarForRound(server);
+        if (state == GameState.RUNNING) {
+            roleModifierManager.apply(context);
+            respawnManager.refreshHunterProgress(context);
+        }
+        HunterWildcardPackets.syncAll(server);
+    }
+
+    /** Locator bar filter: during a round you only see waypoints of your own side. */
+    public boolean canSeeWaypoint(ServerPlayerEntity receiver, LivingEntity source) {
+        if (state == GameState.WAITING || !config.locatorBarTeamOnly || !(source instanceof ServerPlayerEntity sourcePlayer)) {
+            return true;
+        }
+        PlayerRole receiverRole = teamManager.getRole(receiver);
+        if (receiverRole == null) {
+            return true;
+        }
+        return receiverRole == teamManager.getRole(sourcePlayer);
+    }
+
     public void handlePlayerAteFood(ServerPlayerEntity player, ItemStack eatenStack) {
         GameContext eventContext = wildcardEventContext(player);
         if (eventContext != null) {
             wildcardManager.onPlayerAteFood(eventContext, player, eatenStack);
+        }
+    }
+
+    public void handleBlockBroken(ServerPlayerEntity player, ServerWorld world, BlockPos pos, BlockState state) {
+        GameContext eventContext = wildcardEventContext(player);
+        if (eventContext != null) {
+            wildcardManager.onBlockBroken(eventContext, player, world, pos, state);
         }
     }
 
@@ -652,8 +766,18 @@ public class GameManager {
         }
     }
 
+    private void handleJoin(ServerPlayerEntity player, MinecraftServer joinedServer) {
+        teamManager.syncScoreboardTeams(joinedServer);
+        if (state != GameState.WAITING && teamManager.getRole(player) == null) {
+            forceSpectator(player);
+        }
+        HunterWildcardPackets.sendSync(player);
+        HunterWildcardPackets.sendObjectiveTo(player);
+    }
+
     private void handleDisconnect(ServerPlayerEntity player) {
         debugMenuPlayers.remove(player.getUuid());
+        forcedSpectators.remove(player.getUuid());
         if (player.getUuid().equals(wildcardTestPlayerUuid)) {
             wildcardTestPlayerUuid = null;
         }
@@ -881,9 +1005,15 @@ public class GameManager {
         if (targetServer != null) {
             clearRoundEffects(debugContext(targetServer));
             restoreLocatorBarRule(targetServer);
+            restoreKeepInventory(targetServer);
+            restoreForcedSpectators(targetServer);
+            teamManager.clearScoreboardTeams(targetServer);
+            HunterWildcardPackets.clearObjective(targetServer);
         }
 
         teamManager.clear();
+        forcedSpectators.clear();
+        previousKeepInventoryRule = null;
         state = GameState.WAITING;
         server = null;
         preparingTicks = 0;
@@ -923,6 +1053,28 @@ public class GameManager {
         return new GameContext(server, config, teamManager, random);
     }
 
+    /**
+     * While picking sides in the lobby, everyone on a team glows in their team colour (red hunters, blue runners
+     * via the scoreboard teams) so the split is visible at a glance. The glow is short and refreshed, so it fades
+     * by itself once a player leaves their team or the round starts.
+     */
+    private void tickLobbyGlow(MinecraftServer tickServer) {
+        lobbyGlowTicks++;
+        if (lobbyGlowTicks < LOBBY_GLOW_REFRESH_TICKS) {
+            return;
+        }
+        lobbyGlowTicks = 0;
+        for (ServerPlayerEntity player : teamManager.getParticipants(tickServer)) {
+            player.addStatusEffect(new StatusEffectInstance(StatusEffects.GLOWING, LOBBY_GLOW_REFRESH_TICKS + 30, 0, false, false, false));
+        }
+    }
+
+    private void clearLobbyGlow(MinecraftServer targetServer) {
+        for (ServerPlayerEntity player : teamManager.getParticipants(targetServer)) {
+            player.removeStatusEffect(StatusEffects.GLOWING);
+        }
+    }
+
     private GameContext wildcardEventContext(ServerPlayerEntity player) {
         if (state == GameState.RUNNING && server != null) {
             return context();
@@ -959,7 +1111,8 @@ public class GameManager {
         compassTracker.onConfigChanged(config);
     }
 
-    private void disableLocatorBarForRound(MinecraftServer targetServer) {
+    /** Team-only mode keeps the locator bar on (filtered by the waypoint mixin); otherwise it is off for the round. */
+    private void applyLocatorBarForRound(MinecraftServer targetServer) {
         if (targetServer == null) {
             return;
         }
@@ -967,7 +1120,69 @@ public class GameManager {
         if (previousLocatorBarRule == null) {
             previousLocatorBarRule = targetServer.getOverworld().getGameRules().getValue(GameRules.LOCATOR_BAR);
         }
-        targetServer.getOverworld().getGameRules().setValue(GameRules.LOCATOR_BAR, false, targetServer);
+        targetServer.getOverworld().getGameRules().setValue(GameRules.LOCATOR_BAR, config.locatorBarTeamOnly, targetServer);
+    }
+
+    /**
+     * The mod decides death drops per side, so vanilla keepInventory is forced off for the round (and
+     * re-forced every second in case the host toggles it) and restored afterwards.
+     */
+    private void takeOverKeepInventory(MinecraftServer targetServer) {
+        if (targetServer == null) {
+            return;
+        }
+        if (previousKeepInventoryRule == null) {
+            previousKeepInventoryRule = targetServer.getOverworld().getGameRules().getValue(GameRules.KEEP_INVENTORY);
+        }
+        enforceKeepInventory(targetServer);
+    }
+
+    private void enforceKeepInventory(MinecraftServer targetServer) {
+        if (targetServer == null || previousKeepInventoryRule == null) {
+            return;
+        }
+        if (Boolean.TRUE.equals(targetServer.getOverworld().getGameRules().getValue(GameRules.KEEP_INVENTORY))) {
+            targetServer.getOverworld().getGameRules().setValue(GameRules.KEEP_INVENTORY, false, targetServer);
+        }
+    }
+
+    private void restoreKeepInventory(MinecraftServer targetServer) {
+        if (targetServer == null || previousKeepInventoryRule == null) {
+            return;
+        }
+        targetServer.getOverworld().getGameRules().setValue(GameRules.KEEP_INVENTORY, previousKeepInventoryRule, targetServer);
+        previousKeepInventoryRule = null;
+    }
+
+    /** Everyone online without a side spectates for the round. */
+    private void forceSpectatorsForRound(MinecraftServer targetServer) {
+        if (targetServer == null) {
+            return;
+        }
+        for (ServerPlayerEntity player : targetServer.getPlayerManager().getPlayerList()) {
+            if (teamManager.getRole(player) == null) {
+                forceSpectator(player);
+            }
+        }
+    }
+
+    private void forceSpectator(ServerPlayerEntity player) {
+        if (player.isSpectator()) {
+            return;
+        }
+        forcedSpectators.putIfAbsent(player.getUuid(), player.interactionManager.getGameMode());
+        player.changeGameMode(GameMode.SPECTATOR);
+        messageManager.direct(player, HunterWildcardText.translatable("msg.spectator.forced"));
+    }
+
+    private void restoreForcedSpectators(MinecraftServer targetServer) {
+        for (Map.Entry<UUID, GameMode> entry : forcedSpectators.entrySet()) {
+            ServerPlayerEntity player = targetServer.getPlayerManager().getPlayer(entry.getKey());
+            if (player != null && player.isSpectator()) {
+                player.changeGameMode(entry.getValue() == GameMode.SPECTATOR ? GameMode.SURVIVAL : entry.getValue());
+            }
+        }
+        forcedSpectators.clear();
     }
 
     private void restoreLocatorBarRule(MinecraftServer targetServer) {

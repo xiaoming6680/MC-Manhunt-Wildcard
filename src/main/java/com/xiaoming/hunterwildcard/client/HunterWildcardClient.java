@@ -1,8 +1,10 @@
 package com.xiaoming.hunterwildcard.client;
 
+import com.xiaoming.hunterwildcard.client.hud.DeathWaitOverlay;
 import com.xiaoming.hunterwildcard.client.hud.WildcardDrawOverlay;
 import com.xiaoming.hunterwildcard.client.key.HunterWildcardKeyBindings;
 import com.xiaoming.hunterwildcard.client.key.KeyScrambleController;
+import com.xiaoming.hunterwildcard.client.screen.CompassTargetScreen;
 import com.xiaoming.hunterwildcard.client.screen.HunterWildcardConfigScreen;
 import com.xiaoming.hunterwildcard.network.HunterWildcardPackets;
 import net.fabricmc.api.ClientModInitializer;
@@ -19,7 +21,11 @@ public class HunterWildcardClient implements ClientModInitializer {
                     ClientGameStatus.update(payload);
                     HunterWildcardConfigScreen.receiveSync(payload);
                 }));
-        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> ClientGameStatus.clear());
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            ClientGameStatus.clear();
+            DeathWaitOverlay.reset();
+        });
+        DeathWaitOverlay.register();
         ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_OPERATION_RESULT, (payload, context) ->
                 context.client().execute(() -> HunterWildcardConfigScreen.receiveOperationResult(payload)));
         ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_CLOSE_CONFIG_SCREEN, (payload, context) ->
@@ -53,8 +59,18 @@ public class HunterWildcardClient implements ClientModInitializer {
                 context.client().execute(() -> WildcardDrawOverlay.setObjectiveStatus(
                         payload.visible(),
                         payload.text(),
-                        payload.style()
+                        payload.style(),
+                        payload.hunterText()
                 )));
+        ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_DEATH_WAIT, (payload, context) ->
+                context.client().execute(() -> DeathWaitOverlay.update(
+                        payload.visible(),
+                        payload.remainingSeconds(),
+                        payload.line1(),
+                        payload.line2()
+                )));
+        ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_COMPASS_MENU, (payload, context) ->
+                context.client().execute(() -> CompassTargetScreen.open(payload)));
         ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_OBJECTIVE_NOTICE, (payload, context) ->
                 context.client().execute(() -> WildcardDrawOverlay.showObjectiveNotice(
                         payload.message(),
@@ -66,6 +82,8 @@ public class HunterWildcardClient implements ClientModInitializer {
                         payload.maxHeat(),
                         payload.visible()
                 )));
+        ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_WORLD_TILT, (payload, context) ->
+                context.client().execute(() -> WorldTiltClient.set(payload.active(), payload.transitionTicks(), payload.gravityX(), payload.gravityZ())));
         ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_KEY_SCRAMBLE, (payload, context) ->
                 context.client().execute(() -> {
                     switch (payload.action()) {
@@ -79,5 +97,6 @@ public class HunterWildcardClient implements ClientModInitializer {
         HunterWildcardKeyBindings.register();
         KeyScrambleController.register();
         BackroomsClient.register();
+        WorldTiltClient.register();
     }
 }

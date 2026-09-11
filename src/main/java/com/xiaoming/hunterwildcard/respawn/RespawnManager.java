@@ -1,5 +1,6 @@
 package com.xiaoming.hunterwildcard.respawn;
 
+import com.xiaoming.hunterwildcard.backrooms.BackroomsDimension;
 import com.xiaoming.hunterwildcard.compass.CompassTracker;
 import com.xiaoming.hunterwildcard.config.ModConfig;
 import com.xiaoming.hunterwildcard.game.GameContext;
@@ -8,23 +9,53 @@ import com.xiaoming.hunterwildcard.network.HunterWildcardPackets;
 import com.xiaoming.hunterwildcard.team.PlayerRole;
 import com.xiaoming.hunterwildcard.util.HunterWildcardText;
 import com.xiaoming.hunterwildcard.util.PlayerUtil;
+import net.minecraft.network.packet.s2c.play.PositionFlag;
+import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.entity.effect.StatusEffects;
+import net.minecraft.entity.effect.StatusEffectInstance;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.GameMode;
+import net.minecraft.world.World;
 
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+/**
+ * Deaths, kill credit, respawn waits and respawn placement.
+ * <p>
+ * Kill credit: a runner death is a hunter kill when a hunter dealt the final blow or hit the runner
+ * within the credit window. Pure environment deaths are counted separately and every N of them
+ * (configurable) convert into one hunter kill, so dying on purpose never resets a chase for free.
+ * <p>
+ * Waiting for respawn is spent behind a full-screen cover, held in place in spectator mode, and the
+ * respawn point is a random surface spot away from the death point (runners also avoid hunters).
+ */
 public class RespawnManager {
-    private final Map<UUID, Integer> respawnTimers = new HashMap<>();
+    private static final int DEATH_WAIT_SYNC_INTERVAL_TICKS = 20;
+    private static final double HOLD_RADIUS = 1.5D;
+
+    private final Map<UUID, WaitingPlayer> waiting = new HashMap<>();
     private final Map<UUID, Integer> remainingLives = new HashMap<>();
     private final Set<UUID> outPlayers = new HashSet<>();
+    private final Map<UUID, HunterHit> lastHunterHits = new HashMap<>();
+    private final Map<UUID, UUID> lastKillers = new HashMap<>();
+    private final Map<UUID, Integer> hunterDeaths = new HashMap<>();
+    private static final int MAX_HUNTER_PENALTY_SECONDS = 60;
+    /** Deaths of the hunter currently being processed, before this one; read by respawnSecondsFor. */
+    private int pendingHunterDeaths;
     private int runnerKillCount;
+    private int environmentDeaths;
+    private int tickCounter;
 
     public void start(GameContext context) {
         clear();
@@ -34,63 +65,140 @@ public class RespawnManager {
         for (ServerPlayerEntity runner : context.getRunners()) {
             remainingLives.put(runner.getUuid(), initialLives(PlayerRole.RUNNER, context.getConfig()));
         }
+        refreshHunterProgress(context);
     }
 
-    public DeathOutcome onPlayerDeath(GameContext context, ServerPlayerEntity player, PlayerRole role, ServerPlayerEntity hunterKiller) {
+    /** Remembers the last hunter who damaged a runner so later deaths can still be credited. */
+    public void recordHunterHit(ServerPlayerEntity runner, ServerPlayerEntity hunter) {
+        lastHunterHits.put(runner.getUuid(), new HunterHit(hunter.getUuid(), tickCounter));
+    }
+
+    public DeathOutcome onPlayerDeath(GameContext context, ServerPlayerEntity player, PlayerRole role, ServerPlayerEntity directHunterKiller) {
         if (role == null) {
             return DeathOutcome.none();
         }
 
         ModConfig config = context.getConfig();
-        boolean killedByHunter = hunterKiller != null;
-        Text deathPrefix = deathPrefix(player, role, hunterKiller, config);
-        if (role == PlayerRole.RUNNER && killedByHunter) {
-            runnerKillCount++;
-            if (config.getHunterVictoryType() == HunterVictoryType.RUNNER_KILL_COUNT) {
-                int remainingKills = Math.max(0, config.hunterRunnerKillTarget - runnerKillCount);
-                HunterWildcardPackets.sendHunterKillFeedback(
-                        context,
-                        PlayerUtil.displayNameSpec(hunterKiller),
-                        PlayerUtil.displayNameSpec(player),
-                        remainingKills,
-                        runnerKillCount,
-                        config.hunterRunnerKillTarget
-                );
-            }
-            if (config.getHunterVictoryType() == HunterVictoryType.RUNNER_KILL_COUNT
-                    && runnerKillCount >= config.hunterRunnerKillTarget) {
-                return DeathOutcome.messageAndEnd(
-                        HunterWildcardText.translatable("msg.death.final", deathPrefix),
-                        HunterWildcardText.spec("msg.win.hunter.kill_target", config.hunterRunnerKillTarget)
-                );
-            }
-            if (config.getHunterVictoryType() == HunterVictoryType.RUNNER_KILL_COUNT) {
-                announceKillCountMilestone(context, config.hunterRunnerKillTarget - runnerKillCount);
+        // Previous deaths of this hunter drive the escalating respawn wait computed below.
+        pendingHunterDeaths = role == PlayerRole.HUNTER ? hunterDeaths.merge(player.getUuid(), 1, Integer::sum) - 1 : 0;
+        ServerPlayerEntity creditedHunter = directHunterKiller;
+        boolean assisted = false;
+        HunterHit lastHit = lastHunterHits.remove(player.getUuid());
+        if (creditedHunter == null && role == PlayerRole.RUNNER && lastHit != null
+                && tickCounter - lastHit.tick() <= config.getHunterHitCreditTicks()) {
+            ServerPlayerEntity hunter = context.getServer().getPlayerManager().getPlayer(lastHit.hunterId());
+            if (hunter != null && context.getTeamManager().isHunter(hunter)) {
+                creditedHunter = hunter;
+                assisted = true;
             }
         }
 
+        KillCredit credit = KillCredit.NONE;
+        if (role == PlayerRole.RUNNER) {
+            credit = registerRunnerDeath(config, creditedHunter);
+        }
+        Text deathPrefix = deathPrefix(player, role, creditedHunter, assisted, credit, config);
+        String reasonSpec = creditedHunter != null
+                ? HunterWildcardText.spec("hud.death_wait.killed_by", PlayerUtil.displayNameSpec(creditedHunter))
+                : HunterWildcardText.spec("hud.death_wait.died");
+        String endingReason = null;
+
+        String killerSpec = creditedHunter != null ? PlayerUtil.displayNameSpec(creditedHunter) : HunterWildcardText.key("common.environment");
+        if (creditedHunter != null) {
+            lastKillers.put(player.getUuid(), creditedHunter.getUuid());
+        } else {
+            lastKillers.remove(player.getUuid());
+        }
+        if (role == PlayerRole.RUNNER && config.getHunterVictoryType() == HunterVictoryType.RUNNER_KILL_COUNT && credit.counted()) {
+            int remainingKills = Math.max(0, config.hunterRunnerKillTarget - runnerKillCount);
+            HunterWildcardPackets.sendHunterKillFeedback(
+                    context,
+                    killerSpec,
+                    PlayerUtil.displayNameSpec(player),
+                    remainingKills,
+                    runnerKillCount,
+                    config.hunterRunnerKillTarget
+            );
+            if (runnerKillCount >= config.hunterRunnerKillTarget) {
+                endingReason = HunterWildcardText.spec("msg.win.hunter.kill_target", config.hunterRunnerKillTarget);
+            } else {
+                announceKillCountMilestone(context, remainingKills);
+            }
+        } else if (role == PlayerRole.RUNNER && config.getHunterVictoryType() == HunterVictoryType.RUNNER_KILL_COUNT) {
+            // Environment death that has not filled the quota yet: still a top-right card, just calmer.
+            HunterWildcardPackets.sendHudFeedback(
+                    context,
+                    HunterWildcardText.spec("hud.feedback.env_death.title"),
+                    HunterWildcardText.spec("hud.feedback.versus", killerSpec, PlayerUtil.displayNameSpec(player)),
+                    HunterWildcardText.spec("hud.feedback.env_progress", credit.environmentProgress(), config.environmentDeathsPerKill),
+                    "neutral"
+            );
+        }
+        refreshHunterProgress(context);
+
         RespawnMode mode = modeFor(role, config);
         if (mode == RespawnMode.INFINITE) {
-            scheduleRespawn(player, respawnTicksFor(role, config));
-            return DeathOutcome.message(HunterWildcardText.translatable("msg.death.respawn_scheduled", deathPrefix, respawnSecondsFor(role, config)));
+            scheduleRespawn(context, player, role, respawnTicksFor(role, config), reasonSpec);
+            sendEliminationFeedback(context, player, role, killerSpec, creditedHunter != null, HunterWildcardText.key("common.infinite"), false);
+            Text message = HunterWildcardText.translatable("msg.death.respawn_scheduled", deathPrefix, respawnSecondsFor(role, config));
+            return endingReason != null ? DeathOutcome.messageAndEnd(message, endingReason) : DeathOutcome.message(message);
         }
 
         int livesAfterDeath = mode == RespawnMode.NO_RESPAWN ? 0 : decrementLife(player, role, config);
         if (livesAfterDeath > 0) {
-            scheduleRespawn(player, respawnTicksFor(role, config));
-            return DeathOutcome.message(HunterWildcardText.translatable("msg.death.limited_respawn_scheduled", deathPrefix, livesAfterDeath, respawnSecondsFor(role, config)));
+            scheduleRespawn(context, player, role, respawnTicksFor(role, config), reasonSpec);
+            refreshHunterProgress(context);
+            sendEliminationFeedback(context, player, role, killerSpec, creditedHunter != null, Integer.toString(livesAfterDeath), false);
+            Text message = HunterWildcardText.translatable("msg.death.limited_respawn_scheduled", deathPrefix, livesAfterDeath, respawnSecondsFor(role, config));
+            return endingReason != null ? DeathOutcome.messageAndEnd(message, endingReason) : DeathOutcome.message(message);
         }
 
         markOut(player);
+        refreshHunterProgress(context);
+        sendEliminationFeedback(context, player, role, killerSpec, creditedHunter != null, "0", true);
         Text outMessage = HunterWildcardText.translatable("msg.death.out", deathPrefix);
-        if (role == PlayerRole.RUNNER) {
-            String endingReason = runnerLossReason(context, player);
-            if (endingReason != null) {
-                return DeathOutcome.messageAndEnd(outMessage, endingReason);
-            }
+        if (endingReason == null && role == PlayerRole.RUNNER) {
+            endingReason = runnerLossReason(context, player);
         }
+        return endingReason != null ? DeathOutcome.messageAndEnd(outMessage, endingReason) : DeathOutcome.message(outMessage);
+    }
 
-        return DeathOutcome.message(outMessage);
+    /**
+     * Top-right card for runner deaths outside kill-count mode (kill-count mode has its own card with
+     * the target progress): who got whom, and lives left or "out".
+     */
+    private void sendEliminationFeedback(GameContext context, ServerPlayerEntity player, PlayerRole role, String killerSpec,
+                                         boolean hunterCredited, String livesArg, boolean out) {
+        if (role != PlayerRole.RUNNER || context.getConfig().getHunterVictoryType() == HunterVictoryType.RUNNER_KILL_COUNT) {
+            return;
+        }
+        String title = hunterCredited ? HunterWildcardText.spec("hud.feedback.kill.title") : HunterWildcardText.spec("hud.feedback.env_kill.title");
+        String line2 = out ? HunterWildcardText.spec("hud.feedback.runner_out") : HunterWildcardText.spec("hud.feedback.lives_left", livesArg);
+        HunterWildcardPackets.sendHudFeedback(
+                context,
+                title,
+                HunterWildcardText.spec("hud.feedback.versus", killerSpec, PlayerUtil.displayNameSpec(player)),
+                line2,
+                "kill"
+        );
+    }
+
+    /** Updates the kill counters for a runner death and says whether it counted as a hunter kill. */
+    private KillCredit registerRunnerDeath(ModConfig config, ServerPlayerEntity creditedHunter) {
+        if (config.getHunterVictoryType() != HunterVictoryType.RUNNER_KILL_COUNT) {
+            return KillCredit.NONE;
+        }
+        if (creditedHunter != null) {
+            runnerKillCount++;
+            return new KillCredit(true, false, 0);
+        }
+        environmentDeaths++;
+        if (environmentDeaths >= config.environmentDeathsPerKill) {
+            environmentDeaths = 0;
+            runnerKillCount++;
+            return new KillCredit(true, true, 0);
+        }
+        return new KillCredit(false, true, environmentDeaths);
     }
 
     public void onAfterRespawn(GameContext context, ServerPlayerEntity player, CompassTracker compassTracker) {
@@ -100,73 +208,146 @@ public class RespawnManager {
             return;
         }
 
-        Integer timer = respawnTimers.get(player.getUuid());
-        if (timer != null && timer > 0) {
-            player.changeGameMode(GameMode.SPECTATOR);
-            player.sendMessage(HunterWildcardText.translatable("msg.respawn.spectator_wait"), false);
+        WaitingPlayer wait = waiting.get(player.getUuid());
+        if (wait != null) {
+            if (wait.remainingTicks <= 0) {
+                waiting.remove(player.getUuid());
+                finishRespawn(context, player, wait, compassTracker);
+                return;
+            }
+            beginHolding(context, player, wait);
             return;
         }
 
         if (context.getTeamManager().isHunter(player)) {
             compassTracker.giveCompass(player);
         }
+        highlightKiller(context, player);
+        HunterWildcardPackets.sendObjectiveTo(player);
+    }
+
+    /** A respawned runner sees the hunter that killed them glow for ten seconds, so they know which way not to run. */
+    private void highlightKiller(GameContext context, ServerPlayerEntity player) {
+        UUID killerId = lastKillers.remove(player.getUuid());
+        if (killerId == null || !context.getTeamManager().isRunner(player)) {
+            return;
+        }
+        ServerPlayerEntity killer = context.getServer().getPlayerManager().getPlayer(killerId);
+        if (killer == null || !killer.isAlive() || !context.getTeamManager().isHunter(killer)) {
+            return;
+        }
+        killer.addStatusEffect(new StatusEffectInstance(StatusEffects.GLOWING, KILLER_HIGHLIGHT_TICKS, 0, false, false, false));
+        player.sendMessage(HunterWildcardText.translatable("msg.respawn.killer_highlighted", PlayerUtil.displayNameText(killer), KILLER_HIGHLIGHT_TICKS / 20).formatted(Formatting.RED), false);
+    }
+
+    /** Puts a freshly respawned player behind the cover, parked in spectator mode at the hold anchor. */
+    private void beginHolding(GameContext context, ServerPlayerEntity player, WaitingPlayer wait) {
+        player.changeGameMode(GameMode.SPECTATOR);
+        boolean relocate = context.getConfig().randomRespawnEnabled;
+        ServerWorld deathWorld = context.getServer().getWorld(wait.deathWorld);
+        if (relocate && deathWorld != null && !BackroomsDimension.isBackrooms(deathWorld)) {
+            wait.holdWorld = deathWorld.getRegistryKey();
+            wait.holdPos = wait.deathPos;
+        } else {
+            wait.holdWorld = player.getEntityWorld().getRegistryKey();
+            wait.holdPos = player.getEntityPos();
+        }
+        wait.holding = true;
+        holdInPlace(context, player, wait);
+        sendDeathWait(player, wait);
+    }
+
+    private void holdInPlace(GameContext context, ServerPlayerEntity player, WaitingPlayer wait) {
+        ServerWorld world = context.getServer().getWorld(wait.holdWorld);
+        if (world == null) {
+            return;
+        }
+        if (player.getEntityWorld() != world || player.getEntityPos().squaredDistanceTo(wait.holdPos) > HOLD_RADIUS * HOLD_RADIUS) {
+            player.setVelocity(Vec3d.ZERO);
+            player.teleport(world, wait.holdPos.x, wait.holdPos.y, wait.holdPos.z, Set.<PositionFlag>of(), player.getYaw(), player.getPitch(), true);
+        }
     }
 
     public void tick(GameContext context, CompassTracker compassTracker) {
-        Iterator<Map.Entry<UUID, Integer>> iterator = respawnTimers.entrySet().iterator();
+        tickCounter++;
+        Iterator<Map.Entry<UUID, WaitingPlayer>> iterator = waiting.entrySet().iterator();
         while (iterator.hasNext()) {
-            Map.Entry<UUID, Integer> entry = iterator.next();
-            int remaining = entry.getValue() - 1;
-
+            Map.Entry<UUID, WaitingPlayer> entry = iterator.next();
+            WaitingPlayer wait = entry.getValue();
             ServerPlayerEntity player = context.getServer().getPlayerManager().getPlayer(entry.getKey());
-            if (player == null) {
+            if (player == null || outPlayers.contains(entry.getKey())) {
                 iterator.remove();
                 continue;
             }
 
-            if (outPlayers.contains(player.getUuid())) {
-                iterator.remove();
-                continue;
-            }
-
-            if (remaining > 0) {
-                entry.setValue(remaining);
-                if (!player.isDead()) {
-                    PlayerRole role = context.getTeamManager().getRole(player);
-                    player.sendMessage(HunterWildcardText.translatable(
-                            "msg.respawn.waiting_actionbar",
-                            remaining / 20 + 1,
-                            remainingLivesText(player, role, context.getConfig())
-                    ), true);
+            wait.remainingTicks--;
+            if (wait.remainingTicks > 0) {
+                if (wait.holding && !player.isDead()) {
+                    holdInPlace(context, player, wait);
+                    if (wait.remainingTicks % DEATH_WAIT_SYNC_INTERVAL_TICKS == 0) {
+                        sendDeathWait(player, wait);
+                    }
                 }
+                continue;
+            }
+
+            if (player.isDead()) {
+                // Still on the death screen: finishRespawn runs from onAfterRespawn once they click respawn.
+                wait.remainingTicks = 0;
                 continue;
             }
 
             iterator.remove();
-            if (!player.isDead()) {
-                player.changeGameMode(GameMode.SURVIVAL);
-                player.setHealth(player.getMaxHealth());
-                if (context.getTeamManager().isHunter(player)) {
-                    compassTracker.giveCompass(player);
-                }
-                PlayerRole role = context.getTeamManager().getRole(player);
-                player.sendMessage(HunterWildcardText.translatable("msg.respawn.rejoined"), false);
-                HunterWildcardPackets.sendHudFeedback(
-                        context,
-                        HunterWildcardText.spec("hud.feedback.respawn.title"),
-                        HunterWildcardText.spec("hud.feedback.respawn.player", PlayerUtil.displayNameSpec(player)),
-                        HunterWildcardText.spec("hud.feedback.respawn.lives", remainingLivesArg(player, role, context.getConfig())),
-                        feedbackStyle(role)
-                );
+            finishRespawn(context, player, wait, compassTracker);
+        }
+    }
+
+    private void finishRespawn(GameContext context, ServerPlayerEntity player, WaitingPlayer wait, CompassTracker compassTracker) {
+        ModConfig config = context.getConfig();
+        highlightKiller(context, player);
+        ServerWorld deathWorld = context.getServer().getWorld(wait.deathWorld);
+        if (config.randomRespawnEnabled && deathWorld != null && !BackroomsDimension.isBackrooms(deathWorld)) {
+            int minDistance = wait.role == PlayerRole.HUNTER ? config.hunterRespawnDistance : config.runnerRespawnDistance;
+            // Runners respawn away from hunters; hunters respawn away from runners so a death is not a free re-engage.
+            List<ServerPlayerEntity> avoid = wait.role == PlayerRole.RUNNER ? context.getHunters() : context.getRunners();
+            double clearance = wait.role == PlayerRole.RUNNER ? config.runnerRespawnDistance : config.hunterRespawnRunnerClearance;
+            BlockPos spot = RespawnSpotFinder.find(deathWorld, wait.deathPos, minDistance, minDistance * 2, avoid, clearance, context.getRandom());
+            if (spot != null) {
+                player.setVelocity(Vec3d.ZERO);
+                player.teleport(deathWorld, spot.getX() + 0.5D, spot.getY(), spot.getZ() + 0.5D, Set.<PositionFlag>of(), player.getYaw(), player.getPitch(), true);
             }
         }
+
+        player.changeGameMode(GameMode.SURVIVAL);
+        player.setHealth(player.getMaxHealth());
+        player.fallDistance = 0.0D;
+        if (context.getTeamManager().isHunter(player)) {
+            compassTracker.giveCompass(player);
+        }
+        HunterWildcardPackets.sendDeathWait(player, false, 0, "", "");
+        HunterWildcardPackets.sendObjectiveTo(player);
+        player.sendMessage(HunterWildcardText.translatable("msg.respawn.rejoined"), false);
+        HunterWildcardPackets.sendHudFeedback(
+                context,
+                HunterWildcardText.spec("hud.feedback.respawn.title"),
+                HunterWildcardText.spec("hud.feedback.respawn.player", PlayerUtil.displayNameSpec(player)),
+                HunterWildcardText.spec("hud.feedback.respawn.lives", remainingLivesArg(player, wait.role, config)),
+                feedbackStyle(wait.role)
+        );
+    }
+
+    private void sendDeathWait(ServerPlayerEntity player, WaitingPlayer wait) {
+        int seconds = Math.max(0, (wait.remainingTicks + 19) / 20);
+        HunterWildcardPackets.sendDeathWait(player, true, seconds, wait.reasonSpec, wait.livesSpec);
     }
 
     public void remove(ServerPlayerEntity player) {
         UUID uuid = player.getUuid();
-        respawnTimers.remove(uuid);
+        waiting.remove(uuid);
         remainingLives.remove(uuid);
         outPlayers.remove(uuid);
+        lastHunterHits.remove(uuid);
+        lastKillers.remove(uuid);
     }
 
     public boolean isOut(ServerPlayerEntity player) {
@@ -174,8 +355,8 @@ public class RespawnManager {
     }
 
     public boolean isWaitingForRespawn(ServerPlayerEntity player) {
-        Integer timer = respawnTimers.get(player.getUuid());
-        return timer != null && timer > 0 && !outPlayers.contains(player.getUuid());
+        WaitingPlayer wait = waiting.get(player.getUuid());
+        return wait != null && wait.remainingTicks > 0 && !outPlayers.contains(player.getUuid());
     }
 
     public int getRunnerKillCount() {
@@ -183,33 +364,70 @@ public class RespawnManager {
     }
 
     public void clear() {
-        respawnTimers.clear();
+        waiting.clear();
         remainingLives.clear();
         outPlayers.clear();
+        lastHunterHits.clear();
+        lastKillers.clear();
+        hunterDeaths.clear();
+        pendingHunterDeaths = 0;
         runnerKillCount = 0;
+        environmentDeaths = 0;
     }
 
     public void clear(GameContext context) {
         Set<UUID> affectedPlayers = new HashSet<>();
-        affectedPlayers.addAll(respawnTimers.keySet());
+        affectedPlayers.addAll(waiting.keySet());
         affectedPlayers.addAll(outPlayers);
 
         for (UUID uuid : affectedPlayers) {
             ServerPlayerEntity player = context.getServer().getPlayerManager().getPlayer(uuid);
-            if (player != null && !player.isDead()) {
-                player.changeGameMode(GameMode.SURVIVAL);
+            if (player != null) {
+                HunterWildcardPackets.sendDeathWait(player, false, 0, "", "");
+                if (!player.isDead()) {
+                    player.changeGameMode(GameMode.SURVIVAL);
+                }
             }
         }
 
         clear();
     }
 
-    private void scheduleRespawn(ServerPlayerEntity player, int respawnTicks) {
-        respawnTimers.put(player.getUuid(), Math.max(1, respawnTicks));
+    /** Pushes the hunter progress line of the objective panel (kills, or runners still standing). */
+    public void refreshHunterProgress(GameContext context) {
+        ModConfig config = context.getConfig();
+        String spec;
+        if (config.getHunterVictoryType() == HunterVictoryType.RUNNER_KILL_COUNT) {
+            spec = config.environmentDeathsPerKill > 1
+                    ? HunterWildcardText.spec("hud.objective.hunter_kills_env", runnerKillCount, config.hunterRunnerKillTarget, environmentDeaths, config.environmentDeathsPerKill)
+                    : HunterWildcardText.spec("hud.objective.hunter_kills", runnerKillCount, config.hunterRunnerKillTarget);
+        } else {
+            List<ServerPlayerEntity> runners = context.getRunners();
+            int alive = 0;
+            int livesLeft = 0;
+            for (ServerPlayerEntity runner : runners) {
+                if (!outPlayers.contains(runner.getUuid())) {
+                    alive++;
+                    livesLeft += remainingLives.getOrDefault(runner.getUuid(), initialLives(PlayerRole.RUNNER, config));
+                }
+            }
+            spec = config.getRunnerRespawnMode() == RespawnMode.LIMITED_LIVES
+                    ? HunterWildcardText.spec("hud.objective.runners_alive_lives", alive, runners.size(), livesLeft)
+                    : HunterWildcardText.spec("hud.objective.runners_alive", alive, runners.size());
+        }
+        HunterWildcardPackets.sendHunterProgress(context.getServer(), spec);
+    }
+
+    private void scheduleRespawn(GameContext context, ServerPlayerEntity player, PlayerRole role, int respawnTicks, String reasonSpec) {
+        ModConfig config = context.getConfig();
+        WaitingPlayer wait = new WaitingPlayer(role, player.getEntityWorld().getRegistryKey(), player.getEntityPos(), Math.max(1, respawnTicks));
+        wait.reasonSpec = reasonSpec;
+        wait.livesSpec = HunterWildcardText.spec("hud.death_wait.lives", remainingLivesArgAfterDeath(player, role, config));
+        waiting.put(player.getUuid(), wait);
     }
 
     private void markOut(ServerPlayerEntity player) {
-        respawnTimers.remove(player.getUuid());
+        waiting.remove(player.getUuid());
         remainingLives.put(player.getUuid(), 0);
         outPlayers.add(player.getUuid());
     }
@@ -240,11 +458,16 @@ public class RespawnManager {
     }
 
     private int respawnTicksFor(PlayerRole role, ModConfig config) {
-        return role == PlayerRole.HUNTER ? config.getHunterRespawnTicks() : config.getRunnerRespawnTicks();
+        return respawnSecondsFor(role, config) * 20;
     }
 
+    /** Hunters wait longer with every death this round (penalty per death, at most 60 extra seconds). */
     private int respawnSecondsFor(PlayerRole role, ModConfig config) {
-        return role == PlayerRole.HUNTER ? config.hunterRespawnSeconds : config.runnerRespawnSeconds;
+        if (role != PlayerRole.HUNTER) {
+            return config.runnerRespawnSeconds;
+        }
+        int penalty = Math.min(MAX_HUNTER_PENALTY_SECONDS, config.hunterRespawnPenaltySeconds * pendingHunterDeaths);
+        return config.hunterRespawnSeconds + penalty;
     }
 
     private String runnerLossReason(GameContext context, ServerPlayerEntity outRunner) {
@@ -262,21 +485,24 @@ public class RespawnManager {
         return HunterWildcardText.spec("msg.win.hunter.all_runners_out");
     }
 
-    private Text deathPrefix(ServerPlayerEntity player, PlayerRole role, ServerPlayerEntity hunterKiller, ModConfig config) {
+    private Text deathPrefix(ServerPlayerEntity player, PlayerRole role, ServerPlayerEntity creditedHunter, boolean assisted, KillCredit credit, ModConfig config) {
         Text playerName = PlayerUtil.displayNameText(player);
         if (role != PlayerRole.RUNNER) {
             return HunterWildcardText.translatable("msg.death.player", role.getDisplayText(), playerName);
         }
 
-        if (hunterKiller != null) {
-            if (config.getHunterVictoryType() == HunterVictoryType.RUNNER_KILL_COUNT) {
-                return HunterWildcardText.translatable("msg.death.runner_killed_counted", playerName, PlayerUtil.displayNameText(hunterKiller));
-            }
-            return HunterWildcardText.translatable("msg.death.runner_killed", playerName, PlayerUtil.displayNameText(hunterKiller));
+        if (creditedHunter != null) {
+            Text hunterName = PlayerUtil.displayNameText(creditedHunter);
+            return assisted
+                    ? HunterWildcardText.translatable("msg.death.runner_killed_assist", playerName, hunterName)
+                    : HunterWildcardText.translatable("msg.death.runner_killed", playerName, hunterName);
         }
 
         if (config.getHunterVictoryType() == HunterVictoryType.RUNNER_KILL_COUNT) {
-            return HunterWildcardText.translatable("msg.death.runner_died_not_counted", playerName);
+            if (credit.counted()) {
+                return HunterWildcardText.translatable("msg.death.runner_env_counted", playerName);
+            }
+            return HunterWildcardText.translatable("msg.death.runner_env_progress", playerName, credit.environmentProgress(), config.environmentDeathsPerKill);
         }
 
         return HunterWildcardText.translatable("msg.death.runner_died", playerName);
@@ -303,23 +529,6 @@ public class RespawnManager {
         }
     }
 
-    private Text remainingLivesText(ServerPlayerEntity player, PlayerRole role, ModConfig config) {
-        if (role == null) {
-            return HunterWildcardText.translatable("common.unknown");
-        }
-
-        RespawnMode mode = modeFor(role, config);
-        if (mode == RespawnMode.INFINITE) {
-            return HunterWildcardText.translatable("common.infinite");
-        }
-
-        if (mode == RespawnMode.NO_RESPAWN) {
-            return Text.literal("0");
-        }
-
-        return Text.literal(Integer.toString(remainingLives.getOrDefault(player.getUuid(), initialLives(role, config))));
-    }
-
     private String remainingLivesArg(ServerPlayerEntity player, PlayerRole role, ModConfig config) {
         if (role == null) {
             return HunterWildcardText.key("common.unknown");
@@ -335,6 +544,39 @@ public class RespawnManager {
         }
 
         return Integer.toString(remainingLives.getOrDefault(player.getUuid(), initialLives(role, config)));
+    }
+
+    private String remainingLivesArgAfterDeath(ServerPlayerEntity player, PlayerRole role, ModConfig config) {
+        return remainingLivesArg(player, role, config);
+    }
+
+    private static final int KILLER_HIGHLIGHT_TICKS = 200;
+
+    private record HunterHit(UUID hunterId, int tick) {
+    }
+
+    /** counted: this death added a hunter kill; environment: no hunter involved; environmentProgress: env deaths so far towards the next kill. */
+    private record KillCredit(boolean counted, boolean environment, int environmentProgress) {
+        private static final KillCredit NONE = new KillCredit(false, false, 0);
+    }
+
+    private static final class WaitingPlayer {
+        private final PlayerRole role;
+        private final RegistryKey<World> deathWorld;
+        private final Vec3d deathPos;
+        private int remainingTicks;
+        private boolean holding;
+        private RegistryKey<World> holdWorld;
+        private Vec3d holdPos;
+        private String reasonSpec = "";
+        private String livesSpec = "";
+
+        private WaitingPlayer(PlayerRole role, RegistryKey<World> deathWorld, Vec3d deathPos, int remainingTicks) {
+            this.role = role;
+            this.deathWorld = deathWorld;
+            this.deathPos = deathPos;
+            this.remainingTicks = remainingTicks;
+        }
     }
 
     public record DeathOutcome(Text message, String endingReason) {

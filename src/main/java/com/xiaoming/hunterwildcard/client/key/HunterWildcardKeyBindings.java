@@ -1,7 +1,6 @@
 package com.xiaoming.hunterwildcard.client.key;
 
 import com.xiaoming.hunterwildcard.HunterWildcardMod;
-import com.xiaoming.hunterwildcard.client.ClientGameStatus;
 import com.xiaoming.hunterwildcard.client.screen.HunterWildcardConfigScreen;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
@@ -36,13 +35,7 @@ public class HunterWildcardKeyBindings {
                     continue;
                 }
 
-                // Operators always get the full menu. Everyone else gets the menu in the lobby (to join a team)
-                // and a compact status HUD toggle once the round has started.
-                if (ClientGameStatus.hasSync() && !ClientGameStatus.isWaiting() && !ClientGameStatus.canManage()) {
-                    ClientGameStatus.toggleStatusHud();
-                    continue;
-                }
-
+                // The key always opens the panel; the status HUD toggle lives on the panel's GAME page.
                 client.setScreen(new HunterWildcardConfigScreen());
             }
         });

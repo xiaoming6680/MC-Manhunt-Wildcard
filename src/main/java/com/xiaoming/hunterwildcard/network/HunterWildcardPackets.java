@@ -8,6 +8,7 @@ import com.xiaoming.hunterwildcard.game.GameManager;
 import com.xiaoming.hunterwildcard.game.GameState;
 import com.xiaoming.hunterwildcard.team.PlayerRole;
 import com.xiaoming.hunterwildcard.util.HunterWildcardText;
+import com.xiaoming.hunterwildcard.util.PlayerUtil;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.network.RegistryByteBuf;
@@ -17,6 +18,12 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 public class HunterWildcardPackets {
     public static final CustomPayload.Id<RequestConfigPayload> C2S_REQUEST_CONFIG =
@@ -43,6 +50,8 @@ public class HunterWildcardPackets {
             new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "objective_notice"));
     public static final CustomPayload.Id<WeaponOverheatStatusPayload> S2C_WEAPON_OVERHEAT_STATUS =
             new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "weapon_overheat_status"));
+    public static final CustomPayload.Id<WorldTiltPayload> S2C_WORLD_TILT =
+            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "world_tilt"));
     public static final CustomPayload.Id<KeyScramblePayload> S2C_KEY_SCRAMBLE =
             new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "key_scramble"));
     public static final CustomPayload.Id<BackroomsPhasePayload> S2C_BACKROOMS_PHASE =
@@ -60,8 +69,19 @@ public class HunterWildcardPackets {
     public static final CustomPayload.Id<GameActionPayload> C2S_GAME_ACTION =
             new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "game_action"));
 
+    public static final CustomPayload.Id<DeathWaitPayload> S2C_DEATH_WAIT =
+            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "death_wait"));
+    public static final CustomPayload.Id<CompassMenuPayload> S2C_COMPASS_MENU =
+            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "compass_menu"));
+    public static final CustomPayload.Id<CompassSelectPayload> C2S_COMPASS_SELECT =
+            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "compass_select"));
+
     private static boolean payloadTypesRegistered;
     private static boolean serverReceiversRegistered;
+    private static boolean objectiveRunnerVisible;
+    private static String objectiveRunnerText = "";
+    private static String objectiveRunnerStyle = "";
+    private static String objectiveHunterText = "";
 
     private HunterWildcardPackets() {
     }
@@ -78,6 +98,7 @@ public class HunterWildcardPackets {
         PayloadTypeRegistry.playS2C().register(S2C_CLOSE_CONFIG_SCREEN, CloseConfigScreenPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(S2C_CLEAR_CHAT, ClearChatPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(S2C_WILDCARD_DRAW, WildcardDrawPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(S2C_WORLD_TILT, WorldTiltPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(S2C_WILDCARD_INTRO, WildcardIntroPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(S2C_HUNTER_KILL_FEEDBACK, HunterKillFeedbackPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(S2C_HUD_FEEDBACK, HudFeedbackPayload.CODEC);
@@ -92,6 +113,9 @@ public class HunterWildcardPackets {
         PayloadTypeRegistry.playC2S().register(C2S_TEST_WILDCARD, TestWildcardPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(C2S_TEAM_ACTION, TeamActionPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(C2S_GAME_ACTION, GameActionPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(S2C_DEATH_WAIT, DeathWaitPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(S2C_COMPASS_MENU, CompassMenuPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(C2S_COMPASS_SELECT, CompassSelectPayload.CODEC);
     }
 
     public static void registerServerReceivers() {
@@ -107,6 +131,8 @@ public class HunterWildcardPackets {
         ServerPlayNetworking.registerGlobalReceiver(C2S_TEST_WILDCARD, (payload, context) -> handleTestWildcard(context.player(), payload.wildcardName()));
         ServerPlayNetworking.registerGlobalReceiver(C2S_TEAM_ACTION, (payload, context) -> handleTeamAction(context.player(), payload.action()));
         ServerPlayNetworking.registerGlobalReceiver(C2S_GAME_ACTION, (payload, context) -> handleGameAction(context.player(), payload.action()));
+        ServerPlayNetworking.registerGlobalReceiver(C2S_COMPASS_SELECT, (payload, context) ->
+                GameManager.getInstance().selectCompassTarget(context.player(), payload.nearest() ? null : payload.targetId()));
     }
 
     public static void sendSync(ServerPlayerEntity player) {
@@ -219,16 +245,63 @@ public class HunterWildcardPackets {
         sendObjectiveStatus(context.getServer(), visible, text, style);
     }
 
+    /** Updates the runner objective half of the panel; the hunter progress line is kept as last sent. */
     public static void sendObjectiveStatus(MinecraftServer server, boolean visible, String text, String style) {
+        objectiveRunnerVisible = visible;
+        objectiveRunnerText = text == null ? "" : text;
+        objectiveRunnerStyle = style == null ? "" : style;
+        broadcastObjective(server);
+    }
+
+    /** Updates the hunter progress half of the panel; an empty spec hides that line. */
+    public static void sendHunterProgress(MinecraftServer server, String hunterText) {
+        objectiveHunterText = hunterText == null ? "" : hunterText;
+        broadcastObjective(server);
+    }
+
+    public static void clearObjective(MinecraftServer server) {
+        objectiveRunnerVisible = false;
+        objectiveRunnerText = "";
+        objectiveRunnerStyle = "";
+        objectiveHunterText = "";
+        broadcastObjective(server);
+    }
+
+    /** Re-sends the current panel to one player (used after respawn / join). */
+    public static void sendObjectiveTo(ServerPlayerEntity player) {
+        if (ServerPlayNetworking.canSend(player, S2C_OBJECTIVE_STATUS)) {
+            ServerPlayNetworking.send(player, currentObjectivePayload());
+        }
+    }
+
+    private static ObjectiveStatusPayload currentObjectivePayload() {
+        boolean visible = objectiveRunnerVisible || !objectiveHunterText.isEmpty();
+        return new ObjectiveStatusPayload(visible, objectiveRunnerVisible ? objectiveRunnerText : "", objectiveRunnerStyle, objectiveHunterText);
+    }
+
+    private static void broadcastObjective(MinecraftServer server) {
         if (server == null) {
             return;
         }
 
-        ObjectiveStatusPayload payload = new ObjectiveStatusPayload(visible, text, style);
+        ObjectiveStatusPayload payload = currentObjectivePayload();
         for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
             if (ServerPlayNetworking.canSend(player, S2C_OBJECTIVE_STATUS)) {
                 ServerPlayNetworking.send(player, payload);
             }
+        }
+    }
+
+    /** Full-screen death wait cover: remaining seconds plus two info lines; visible=false clears it. */
+    public static void sendDeathWait(ServerPlayerEntity player, boolean visible, int remainingSeconds, String line1, String line2) {
+        if (ServerPlayNetworking.canSend(player, S2C_DEATH_WAIT)) {
+            ServerPlayNetworking.send(player, new DeathWaitPayload(visible, remainingSeconds, line1, line2));
+        }
+    }
+
+    public static void sendCompassMenu(ServerPlayerEntity hunter, List<CompassTargetEntry> entries, boolean nearestSelected) {
+        if (ServerPlayNetworking.canSend(hunter, S2C_COMPASS_MENU)) {
+            ServerPlayNetworking.send(hunter, new CompassMenuPayload(entries, nearestSelected));
         }
     }
 
@@ -264,6 +337,12 @@ public class HunterWildcardPackets {
     public static void sendBackroomsPhase(ServerPlayerEntity player, BackroomsPhase phase, int holdTicks) {
         if (ServerPlayNetworking.canSend(player, S2C_BACKROOMS_PHASE)) {
             ServerPlayNetworking.send(player, new BackroomsPhasePayload(phase, holdTicks));
+        }
+    }
+
+    public static void sendWorldTilt(ServerPlayerEntity player, boolean active, int transitionTicks, double gravityX, double gravityZ) {
+        if (ServerPlayNetworking.canSend(player, S2C_WORLD_TILT)) {
+            ServerPlayNetworking.send(player, new WorldTiltPayload(active, transitionTicks, gravityX, gravityZ));
         }
     }
 
@@ -308,7 +387,13 @@ public class HunterWildcardPackets {
 
         GameManager manager = GameManager.getInstance();
         if (manager.getState() != GameState.WAITING) {
-            fail(player, HunterWildcardText.spec("msg.config.cannot_edit_started"));
+            // Mid-round only the live-safe subset is applied; everyone is told the rules changed.
+            manager.applyLiveConfig(snapshot.toConfig());
+            manager.saveConfig();
+            String message = HunterWildcardText.spec("msg.config.rules_updated");
+            manager.getMessageManager().broadcast(player.getEntityWorld().getServer(),
+                    HunterWildcardText.translatable("msg.config.rules_updated_by", PlayerUtil.displayNameText(player)));
+            syncAllAndResult(player, true, message);
             return;
         }
 
@@ -541,9 +626,16 @@ public class HunterWildcardPackets {
             int hunterRespawnSeconds,
             int wildcardIntervalSeconds,
             int wildcardDurationSeconds,
+            String wildcardIntervalMode,
+            int wildcardIntervalMinSeconds,
+            int wildcardIntervalMaxSeconds,
+            String wildcardDurationMode,
+            int wildcardDurationMinSeconds,
+            int wildcardDurationMaxSeconds,
             int actionBarIntervalSeconds,
-            int hunterRadarIntervalSeconds,
+            int hunterRadarWarningDistance,
             int supplyDropIntervalSeconds,
+            int spaceShiftIntervalSeconds,
             int blockDecaySeconds,
             int pearlFrenzyMaxPearls,
             int pearlFrenzyIntervalSeconds,
@@ -560,6 +652,16 @@ public class HunterWildcardPackets {
             int hunterDamageMultiplierPercent,
             int hunterSpeedPercent,
             int runnerSpeedPercent,
+            int hunterHitCreditSeconds,
+            int environmentDeathsPerKill,
+            boolean randomRespawnEnabled,
+            int runnerRespawnDistance,
+            int hunterRespawnDistance,
+            int hunterRespawnRunnerClearance,
+            int hunterRespawnPenaltySeconds,
+            boolean locatorBarTeamOnly,
+            boolean surviveBorderEnabled,
+            int surviveBorderRadius,
             String runnerVictoryType,
             String runnerWinMode,
             boolean enableDragonWin,
@@ -583,28 +685,7 @@ public class HunterWildcardPackets {
             String hunterVictoryType,
             boolean hunterWinByRunnerKillsEnabled,
             int hunterRunnerKillTarget,
-            boolean enableSpeedRush,
-            boolean enableFeatherweight,
-            boolean enableGlowing,
-            boolean enableNightHunt,
-            boolean enableExplosiveDeath,
-            boolean enableSupplyDrop,
-            boolean enableHunterRadar,
-            boolean enableCompassChaos,
-            boolean enableHungerChase,
-            boolean enableWeaponOverheat,
-            boolean enableLightLoad,
-            boolean enableBlockDecay,
-            boolean enablePearlFrenzy,
-            boolean enableWindChargeBrawl,
-            boolean enableBloodRage,
-            boolean enableKeyScramble,
-            boolean enableTinyPlayers,
-            boolean enableFragile,
-            boolean enableWhoAreYou,
-            boolean enableStayAway,
-            boolean enableBackrooms,
-            boolean enableDisabledWildcard
+            Map<String, Boolean> enabledWildcards
     ) {
         private static ConfigSnapshot fromBuf(RegistryByteBuf buf) {
             return new ConfigSnapshot(
@@ -614,6 +695,13 @@ public class HunterWildcardPackets {
                     buf.readInt(),
                     buf.readInt(),
                     buf.readInt(),
+                    buf.readString(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readString(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
                     buf.readInt(),
                     buf.readInt(),
                     buf.readInt(),
@@ -632,6 +720,16 @@ public class HunterWildcardPackets {
                     buf.readInt(),
                     buf.readInt(),
                     buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readBoolean(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readBoolean(),
+                    buf.readBoolean(),
                     buf.readInt(),
                     buf.readString(32),
                     buf.readString(32),
@@ -656,28 +754,7 @@ public class HunterWildcardPackets {
                     buf.readString(32),
                     buf.readBoolean(),
                     buf.readInt(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean()
+                    readWildcardToggles(buf)
             );
         }
 
@@ -688,9 +765,16 @@ public class HunterWildcardPackets {
             buf.writeInt(hunterRespawnSeconds);
             buf.writeInt(wildcardIntervalSeconds);
             buf.writeInt(wildcardDurationSeconds);
+            buf.writeString(wildcardIntervalMode);
+            buf.writeInt(wildcardIntervalMinSeconds);
+            buf.writeInt(wildcardIntervalMaxSeconds);
+            buf.writeString(wildcardDurationMode);
+            buf.writeInt(wildcardDurationMinSeconds);
+            buf.writeInt(wildcardDurationMaxSeconds);
             buf.writeInt(actionBarIntervalSeconds);
-            buf.writeInt(hunterRadarIntervalSeconds);
+            buf.writeInt(hunterRadarWarningDistance);
             buf.writeInt(supplyDropIntervalSeconds);
+            buf.writeInt(spaceShiftIntervalSeconds);
             buf.writeInt(blockDecaySeconds);
             buf.writeInt(pearlFrenzyMaxPearls);
             buf.writeInt(pearlFrenzyIntervalSeconds);
@@ -707,6 +791,16 @@ public class HunterWildcardPackets {
             buf.writeInt(hunterDamageMultiplierPercent);
             buf.writeInt(hunterSpeedPercent);
             buf.writeInt(runnerSpeedPercent);
+            buf.writeInt(hunterHitCreditSeconds);
+            buf.writeInt(environmentDeathsPerKill);
+            buf.writeBoolean(randomRespawnEnabled);
+            buf.writeInt(runnerRespawnDistance);
+            buf.writeInt(hunterRespawnDistance);
+            buf.writeInt(hunterRespawnRunnerClearance);
+            buf.writeInt(hunterRespawnPenaltySeconds);
+            buf.writeBoolean(locatorBarTeamOnly);
+            buf.writeBoolean(surviveBorderEnabled);
+            buf.writeInt(surviveBorderRadius);
             buf.writeString(runnerVictoryType);
             buf.writeString(runnerWinMode);
             buf.writeBoolean(enableDragonWin);
@@ -730,28 +824,7 @@ public class HunterWildcardPackets {
             buf.writeString(hunterVictoryType);
             buf.writeBoolean(hunterWinByRunnerKillsEnabled);
             buf.writeInt(hunterRunnerKillTarget);
-            buf.writeBoolean(enableSpeedRush);
-            buf.writeBoolean(enableFeatherweight);
-            buf.writeBoolean(enableGlowing);
-            buf.writeBoolean(enableNightHunt);
-            buf.writeBoolean(enableExplosiveDeath);
-            buf.writeBoolean(enableSupplyDrop);
-            buf.writeBoolean(enableHunterRadar);
-            buf.writeBoolean(enableCompassChaos);
-            buf.writeBoolean(enableHungerChase);
-            buf.writeBoolean(enableWeaponOverheat);
-            buf.writeBoolean(enableLightLoad);
-            buf.writeBoolean(enableBlockDecay);
-            buf.writeBoolean(enablePearlFrenzy);
-            buf.writeBoolean(enableWindChargeBrawl);
-            buf.writeBoolean(enableBloodRage);
-            buf.writeBoolean(enableKeyScramble);
-            buf.writeBoolean(enableTinyPlayers);
-            buf.writeBoolean(enableFragile);
-            buf.writeBoolean(enableWhoAreYou);
-            buf.writeBoolean(enableStayAway);
-            buf.writeBoolean(enableBackrooms);
-            buf.writeBoolean(enableDisabledWildcard);
+            writeWildcardToggles(buf, enabledWildcards);
         }
 
         public static ConfigSnapshot from(ModConfig config) {
@@ -762,9 +835,16 @@ public class HunterWildcardPackets {
                     config.hunterRespawnSeconds,
                     config.wildcardIntervalSeconds,
                     config.wildcardDurationSeconds,
+                    config.wildcardIntervalMode,
+                    config.wildcardIntervalMinSeconds,
+                    config.wildcardIntervalMaxSeconds,
+                    config.wildcardDurationMode,
+                    config.wildcardDurationMinSeconds,
+                    config.wildcardDurationMaxSeconds,
                     config.actionBarIntervalSeconds,
-                    config.hunterRadarIntervalSeconds,
+                    config.hunterRadarWarningDistance,
                     config.supplyDropIntervalSeconds,
+                    config.spaceShiftIntervalSeconds,
                     config.blockDecaySeconds,
                     config.pearlFrenzyMaxPearls,
                     config.pearlFrenzyIntervalSeconds,
@@ -781,6 +861,16 @@ public class HunterWildcardPackets {
                     config.hunterDamageMultiplierPercent,
                     config.hunterSpeedPercent,
                     config.runnerSpeedPercent,
+                    config.hunterHitCreditSeconds,
+                    config.environmentDeathsPerKill,
+                    config.randomRespawnEnabled,
+                    config.runnerRespawnDistance,
+                    config.hunterRespawnDistance,
+                    config.hunterRespawnRunnerClearance,
+                    config.hunterRespawnPenaltySeconds,
+                    config.locatorBarTeamOnly,
+                    config.surviveBorderEnabled,
+                    config.surviveBorderRadius,
                     config.runnerVictoryType,
                     config.runnerWinMode,
                     config.enableDragonWin,
@@ -804,28 +894,7 @@ public class HunterWildcardPackets {
                     config.hunterVictoryType,
                     config.hunterWinByRunnerKillsEnabled,
                     config.hunterRunnerKillTarget,
-                    config.enableSpeedRush,
-                    config.enableFeatherweight,
-                    config.enableGlowing,
-                    config.enableNightHunt,
-                    config.enableExplosiveDeath,
-                    config.enableSupplyDrop,
-                    config.enableHunterRadar,
-                    config.enableCompassChaos,
-                    config.enableHungerChase,
-                    config.enableWeaponOverheat,
-                    config.enableLightLoad,
-                    config.enableBlockDecay,
-                    config.enablePearlFrenzy,
-                    config.enableWindChargeBrawl,
-                    config.enableBloodRage,
-                    config.enableKeyScramble,
-                    config.enableTinyPlayers,
-                    config.enableFragile,
-                    config.enableWhoAreYou,
-                    config.enableStayAway,
-                    config.enableBackrooms,
-                    config.enableDisabledWildcard
+                    new LinkedHashMap<>(config.enabledWildcards)
             );
         }
 
@@ -837,9 +906,16 @@ public class HunterWildcardPackets {
             config.hunterRespawnSeconds = hunterRespawnSeconds;
             config.wildcardIntervalSeconds = wildcardIntervalSeconds;
             config.wildcardDurationSeconds = wildcardDurationSeconds;
+            config.wildcardIntervalMode = wildcardIntervalMode;
+            config.wildcardIntervalMinSeconds = wildcardIntervalMinSeconds;
+            config.wildcardIntervalMaxSeconds = wildcardIntervalMaxSeconds;
+            config.wildcardDurationMode = wildcardDurationMode;
+            config.wildcardDurationMinSeconds = wildcardDurationMinSeconds;
+            config.wildcardDurationMaxSeconds = wildcardDurationMaxSeconds;
             config.actionBarIntervalSeconds = actionBarIntervalSeconds;
-            config.hunterRadarIntervalSeconds = hunterRadarIntervalSeconds;
+            config.hunterRadarWarningDistance = hunterRadarWarningDistance;
             config.supplyDropIntervalSeconds = supplyDropIntervalSeconds;
+            config.spaceShiftIntervalSeconds = spaceShiftIntervalSeconds;
             config.blockDecaySeconds = blockDecaySeconds;
             config.pearlFrenzyMaxPearls = pearlFrenzyMaxPearls;
             config.pearlFrenzyIntervalSeconds = pearlFrenzyIntervalSeconds;
@@ -856,6 +932,16 @@ public class HunterWildcardPackets {
             config.hunterDamageMultiplierPercent = hunterDamageMultiplierPercent;
             config.hunterSpeedPercent = hunterSpeedPercent;
             config.runnerSpeedPercent = runnerSpeedPercent;
+            config.hunterHitCreditSeconds = hunterHitCreditSeconds;
+            config.environmentDeathsPerKill = environmentDeathsPerKill;
+            config.randomRespawnEnabled = randomRespawnEnabled;
+            config.runnerRespawnDistance = runnerRespawnDistance;
+            config.hunterRespawnDistance = hunterRespawnDistance;
+            config.hunterRespawnRunnerClearance = hunterRespawnRunnerClearance;
+            config.hunterRespawnPenaltySeconds = hunterRespawnPenaltySeconds;
+            config.locatorBarTeamOnly = locatorBarTeamOnly;
+            config.surviveBorderEnabled = surviveBorderEnabled;
+            config.surviveBorderRadius = surviveBorderRadius;
             config.runnerVictoryType = runnerVictoryType;
             config.runnerWinMode = runnerWinMode;
             config.enableDragonWin = enableDragonWin;
@@ -879,30 +965,27 @@ public class HunterWildcardPackets {
             config.hunterVictoryType = hunterVictoryType;
             config.hunterWinByRunnerKillsEnabled = hunterWinByRunnerKillsEnabled;
             config.hunterRunnerKillTarget = hunterRunnerKillTarget;
-            config.enableSpeedRush = enableSpeedRush;
-            config.enableFeatherweight = enableFeatherweight;
-            config.enableGlowing = enableGlowing;
-            config.enableNightHunt = enableNightHunt;
-            config.enableExplosiveDeath = enableExplosiveDeath;
-            config.enableSupplyDrop = enableSupplyDrop;
-            config.enableHunterRadar = enableHunterRadar;
-            config.enableCompassChaos = enableCompassChaos;
-            config.enableHungerChase = enableHungerChase;
-            config.enableWeaponOverheat = enableWeaponOverheat;
-            config.enableLightLoad = enableLightLoad;
-            config.enableBlockDecay = enableBlockDecay;
-            config.enablePearlFrenzy = enablePearlFrenzy;
-            config.enableWindChargeBrawl = enableWindChargeBrawl;
-            config.enableBloodRage = enableBloodRage;
-            config.enableKeyScramble = enableKeyScramble;
-            config.enableTinyPlayers = enableTinyPlayers;
-            config.enableFragile = enableFragile;
-            config.enableWhoAreYou = enableWhoAreYou;
-            config.enableStayAway = enableStayAway;
-            config.enableBackrooms = enableBackrooms;
-            config.enableDisabledWildcard = enableDisabledWildcard;
+            config.enabledWildcards = new LinkedHashMap<>(enabledWildcards);
             config.validate();
             return config;
+        }
+    }
+
+    private static Map<String, Boolean> readWildcardToggles(RegistryByteBuf buf) {
+        int count = buf.readVarInt();
+        Map<String, Boolean> toggles = new LinkedHashMap<>();
+        for (int i = 0; i < count; i++) {
+            String id = buf.readString();
+            toggles.put(id, buf.readBoolean());
+        }
+        return toggles;
+    }
+
+    private static void writeWildcardToggles(RegistryByteBuf buf, Map<String, Boolean> toggles) {
+        buf.writeVarInt(toggles.size());
+        for (Map.Entry<String, Boolean> entry : toggles.entrySet()) {
+            buf.writeString(entry.getKey());
+            buf.writeBoolean(Boolean.TRUE.equals(entry.getValue()));
         }
     }
 
@@ -1130,7 +1213,8 @@ public class HunterWildcardPackets {
         }
     }
 
-    public record ObjectiveStatusPayload(boolean visible, String text, String style) implements CustomPayload {
+    /** Left-hand objective panel: the runner objective line plus a hunter progress line (either may be empty). */
+    public record ObjectiveStatusPayload(boolean visible, String text, String style, String hunterText) implements CustomPayload {
         public static final PacketCodec<RegistryByteBuf, ObjectiveStatusPayload> CODEC =
                 PacketCodec.of(ObjectiveStatusPayload::write, ObjectiveStatusPayload::read);
 
@@ -1138,13 +1222,15 @@ public class HunterWildcardPackets {
             buf.writeBoolean(visible);
             buf.writeString(text == null ? "" : text);
             buf.writeString(style == null ? "" : style);
+            buf.writeString(hunterText == null ? "" : hunterText);
         }
 
         private static ObjectiveStatusPayload read(RegistryByteBuf buf) {
             return new ObjectiveStatusPayload(
                     buf.readBoolean(),
                     buf.readString(192),
-                    buf.readString(32)
+                    buf.readString(32),
+                    buf.readString(256)
             );
         }
 
@@ -1304,6 +1390,27 @@ public class HunterWildcardPackets {
         }
     }
 
+    public record WorldTiltPayload(boolean active, int transitionTicks, double gravityX, double gravityZ) implements CustomPayload {
+        public static final PacketCodec<RegistryByteBuf, WorldTiltPayload> CODEC =
+                PacketCodec.of(WorldTiltPayload::write, WorldTiltPayload::read);
+
+        private void write(RegistryByteBuf buf) {
+            buf.writeBoolean(active);
+            buf.writeVarInt(transitionTicks);
+            buf.writeDouble(gravityX);
+            buf.writeDouble(gravityZ);
+        }
+
+        private static WorldTiltPayload read(RegistryByteBuf buf) {
+            return new WorldTiltPayload(buf.readBoolean(), buf.readVarInt(), buf.readDouble(), buf.readDouble());
+        }
+
+        @Override
+        public Id<? extends CustomPayload> getId() {
+            return S2C_WORLD_TILT;
+        }
+    }
+
     public record TeamActionPayload(TeamAction action) implements CustomPayload {
         public static final PacketCodec<RegistryByteBuf, TeamActionPayload> CODEC =
                 PacketCodec.of(TeamActionPayload::write, TeamActionPayload::read);
@@ -1319,6 +1426,97 @@ public class HunterWildcardPackets {
         @Override
         public Id<? extends CustomPayload> getId() {
             return C2S_TEAM_ACTION;
+        }
+    }
+
+    public record DeathWaitPayload(boolean visible, int remainingSeconds, String line1, String line2) implements CustomPayload {
+        public static final PacketCodec<RegistryByteBuf, DeathWaitPayload> CODEC =
+                PacketCodec.of(DeathWaitPayload::write, DeathWaitPayload::read);
+
+        private void write(RegistryByteBuf buf) {
+            buf.writeBoolean(visible);
+            buf.writeInt(remainingSeconds);
+            buf.writeString(line1 == null ? "" : line1);
+            buf.writeString(line2 == null ? "" : line2);
+        }
+
+        private static DeathWaitPayload read(RegistryByteBuf buf) {
+            return new DeathWaitPayload(buf.readBoolean(), buf.readInt(), buf.readString(256), buf.readString(256));
+        }
+
+        @Override
+        public Id<? extends CustomPayload> getId() {
+            return S2C_DEATH_WAIT;
+        }
+    }
+
+    /** One runner in the hunter's compass menu. distance is -1 when in another dimension. */
+    public record CompassTargetEntry(UUID playerId, String nameSpec, int distance, boolean sameDimension, boolean selected) {
+        private void write(RegistryByteBuf buf) {
+            buf.writeUuid(playerId);
+            buf.writeString(nameSpec);
+            buf.writeInt(distance);
+            buf.writeBoolean(sameDimension);
+            buf.writeBoolean(selected);
+        }
+
+        private static CompassTargetEntry read(RegistryByteBuf buf) {
+            return new CompassTargetEntry(buf.readUuid(), buf.readString(128), buf.readInt(), buf.readBoolean(), buf.readBoolean());
+        }
+    }
+
+    public record CompassMenuPayload(List<CompassTargetEntry> entries, boolean nearestSelected) implements CustomPayload {
+        public static final PacketCodec<RegistryByteBuf, CompassMenuPayload> CODEC =
+                PacketCodec.of(CompassMenuPayload::write, CompassMenuPayload::read);
+
+        private void write(RegistryByteBuf buf) {
+            buf.writeVarInt(entries.size());
+            for (CompassTargetEntry entry : entries) {
+                entry.write(buf);
+            }
+            buf.writeBoolean(nearestSelected);
+        }
+
+        private static CompassMenuPayload read(RegistryByteBuf buf) {
+            int count = Math.min(buf.readVarInt(), 256);
+            List<CompassTargetEntry> entries = new ArrayList<>(count);
+            for (int i = 0; i < count; i++) {
+                entries.add(CompassTargetEntry.read(buf));
+            }
+            return new CompassMenuPayload(entries, buf.readBoolean());
+        }
+
+        @Override
+        public Id<? extends CustomPayload> getId() {
+            return S2C_COMPASS_MENU;
+        }
+    }
+
+    /** nearest=true asks for automatic nearest-runner tracking; otherwise targetId names the runner. */
+    public record CompassSelectPayload(boolean nearest, UUID targetId) implements CustomPayload {
+        public static final PacketCodec<RegistryByteBuf, CompassSelectPayload> CODEC =
+                PacketCodec.of(CompassSelectPayload::write, CompassSelectPayload::read);
+
+        public static CompassSelectPayload trackNearest() {
+            return new CompassSelectPayload(true, new UUID(0L, 0L));
+        }
+
+        public static CompassSelectPayload track(UUID targetId) {
+            return new CompassSelectPayload(false, targetId);
+        }
+
+        private void write(RegistryByteBuf buf) {
+            buf.writeBoolean(nearest);
+            buf.writeUuid(targetId);
+        }
+
+        private static CompassSelectPayload read(RegistryByteBuf buf) {
+            return new CompassSelectPayload(buf.readBoolean(), buf.readUuid());
+        }
+
+        @Override
+        public Id<? extends CustomPayload> getId() {
+            return C2S_COMPASS_SELECT;
         }
     }
 

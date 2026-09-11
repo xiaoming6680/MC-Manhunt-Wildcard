@@ -111,13 +111,16 @@ public final class GameStatusHud {
         rows.add(new Row(label("hud.status.my_team"), tr(sync.playerRole()), sync.playerInTeam() ? COLOR_VALUE : COLOR_ACCENT_GAME));
         rows.add(new Row(label("hud.status.runner_win"), runnerWinText(config), COLOR_VALUE));
         rows.add(new Row(label("hud.status.hunter_win"), hunterWinText(config), COLOR_VALUE));
-        rows.add(new Row(label("hud.status.hunter_respawn"), respawnText(config.hunterRespawnMode(), config.hunterLives(), RespawnMode.INFINITE), COLOR_VALUE));
         rows.add(new Row(label("hud.status.runner_respawn"), respawnText(config.runnerRespawnMode(), config.runnerLives(), RespawnMode.LIMITED_LIVES), COLOR_VALUE));
         rows.add(new Row(label("hud.status.wildcards"), tr(HunterWildcardText.spec("hud.status.wildcards_value",
-                config.wildcardIntervalSeconds(), config.wildcardDurationSeconds(),
+                timingText("RANDOM".equals(config.wildcardIntervalMode()), config.wildcardIntervalSeconds(), config.wildcardIntervalMinSeconds(), config.wildcardIntervalMaxSeconds()),
+                timingText("RANDOM".equals(config.wildcardDurationMode()), config.wildcardDurationSeconds(), config.wildcardDurationMinSeconds(), config.wildcardDurationMaxSeconds()),
                 ClientGameStatus.enabledWildcardCount(config), ClientGameStatus.totalWildcardCount())), COLOR_VALUE));
-        rows.add(new Row(label("hud.status.prepare_time"), tr(HunterWildcardText.spec("hud.status.seconds", config.preparingSeconds())), COLOR_VALUE));
         return rows;
+    }
+
+    private static String timingText(boolean random, int fixed, int min, int max) {
+        return random ? min + "~" + max : Integer.toString(fixed);
     }
 
     private static List<Row> gameRows(SyncConfigPayload sync) {
@@ -129,7 +132,6 @@ public final class GameStatusHud {
                 : stateName;
         rows.add(new Row(label("hud.status.state"), stateValue, COLOR_ACCENT_GAME));
         rows.add(new Row(label("hud.status.my_team"), tr(sync.playerRole()), COLOR_VALUE));
-        rows.add(new Row(label("hud.status.teams"), tr(HunterWildcardText.spec("hud.status.teams_value", sync.hunterCount(), sync.runnerCount())), COLOR_VALUE));
         String wildcardValue;
         if (sync.activeWildcardRunning() && !sync.activeWildcard().isBlank()) {
             String name = tr(HunterWildcardText.wildcardNameKey(sync.activeWildcard()));
@@ -142,8 +144,6 @@ public final class GameStatusHud {
             wildcardValue = tr(HunterWildcardText.key("common.none"));
         }
         rows.add(new Row(label("hud.status.wildcard"), wildcardValue, COLOR_ACCENT_LOBBY));
-        rows.add(new Row(label("hud.status.runner_win"), runnerWinText(config), COLOR_VALUE));
-        rows.add(new Row(label("hud.status.hunter_win"), hunterWinText(config), COLOR_VALUE));
         return rows;
     }
 

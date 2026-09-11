@@ -4,6 +4,7 @@ import com.xiaoming.hunterwildcard.HunterWildcardMod;
 import com.xiaoming.hunterwildcard.client.HunterWildcardClientText;
 import com.xiaoming.hunterwildcard.client.key.KeyScrambleController;
 import com.xiaoming.hunterwildcard.util.HunterWildcardText;
+import com.xiaoming.hunterwildcard.wildcard.WildcardIds;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
 import net.minecraft.client.MinecraftClient;
@@ -38,30 +39,7 @@ public class WildcardDrawOverlay {
     private static final long OBJECTIVE_NOTICE_OUT_MS = 420L;
     private static final long OBJECTIVE_NOTICE_TOTAL_MS = OBJECTIVE_NOTICE_IN_MS + OBJECTIVE_NOTICE_HOLD_MS + OBJECTIVE_NOTICE_OUT_MS;
     private static final float OBJECTIVE_PANEL_SCALE = 0.8F;
-    private static final String[] SPIN_NAMES = {
-            "speed_rush",
-            "featherweight",
-            "glowing",
-            "night_hunt",
-            "explosive_death",
-            "supply_drop",
-            "hunter_radar",
-            "compass_chaos",
-            "hunger_chase",
-            "weapon_overheat",
-            "light_load",
-            "block_decay",
-            "pearl_frenzy",
-            "wind_charge_brawl",
-            "blood_rage",
-            "key_scramble",
-            "tiny_players",
-            "fragile",
-            "who_are_you",
-            "stay_away",
-            "backrooms",
-            "disabled_wildcard"
-    };
+    private static final String[] SPIN_NAMES = WildcardIds.ALL.toArray(new String[0]);
     private static final int KEY_PANEL_WIDTH = 146;
     private static final int KEY_PANEL_ROW_HEIGHT = 11;
     private static final int KEY_PANEL_MARGIN = 6;
@@ -80,10 +58,14 @@ public class WildcardDrawOverlay {
     private static int weaponOverheatHeat;
     private static int weaponOverheatMaxHeat = 1;
     private static final List<FeedbackEntry> feedbackEntries = new ArrayList<>();
+    private static final long KILL_FLASH_MS = 450L;
+    private static final float KILL_PANEL_SCALE = 1.0F;
+    private static long killFlashStartMs = -1L;
     private static boolean objectiveVisible;
     private static boolean objectiveHiding;
     private static long objectiveTransitionStartTimeMs = -1L;
     private static String objectiveText = "";
+    private static String objectiveHunterText = "";
     private static String objectiveStyle = "runner";
     private static final List<ObjectiveNoticeEntry> objectiveNoticeEntries = new ArrayList<>();
 
@@ -115,22 +97,33 @@ public class WildcardDrawOverlay {
         String status = remaining <= 0
                 ? HunterWildcardText.spec("hud.feedback.kill_target.complete")
                 : HunterWildcardText.spec("hud.feedback.kill_target.remaining", remaining, current, target);
-        showFeedback(HunterWildcardText.spec("hud.feedback.kill.title"), hunter + " -> " + runner, status, "hunter");
+        boolean environment = hunterName != null && hunterName.equals(HunterWildcardText.key("common.environment"));
+        String title = environment ? HunterWildcardText.spec("hud.feedback.env_kill.title") : HunterWildcardText.spec("hud.feedback.kill.title");
+        showFeedback(title, hunter + " -> " + runner, status, "kill");
     }
 
     public static void showFeedback(String title, String line1, String line2, String style) {
+        String resolvedStyle = style == null || style.isBlank() ? "neutral" : style;
         feedbackEntries.add(new FeedbackEntry(
                 title == null || title.isBlank() ? HunterWildcardText.spec("hud.feedback.default_title") : title,
                 line1 == null ? "" : line1,
                 line2 == null ? "" : line2,
-                style == null || style.isBlank() ? "neutral" : style,
+                resolvedStyle,
                 System.currentTimeMillis()
         ));
 
-        MinecraftClient.getInstance().getSoundManager().play(PositionedSoundInstance.ui(SoundEvents.BLOCK_NOTE_BLOCK_PLING, 1.15F));
+        var soundManager = MinecraftClient.getInstance().getSoundManager();
+        if (resolvedStyle.equals("kill")) {
+            // A kill should land: the arrow "ding" plus a low thud, and a red flash drawn by the panel.
+            soundManager.play(PositionedSoundInstance.ui(SoundEvents.ENTITY_ARROW_HIT_PLAYER, 1.0F));
+            soundManager.play(PositionedSoundInstance.ui(SoundEvents.ENTITY_GENERIC_EXPLODE.value(), 0.6F));
+            killFlashStartMs = System.currentTimeMillis();
+        } else {
+            soundManager.play(PositionedSoundInstance.ui(SoundEvents.BLOCK_NOTE_BLOCK_PLING, 1.15F));
+        }
     }
 
-    public static void setObjectiveStatus(boolean visible, String text, String style) {
+    public static void setObjectiveStatus(boolean visible, String text, String style, String hunterText) {
         long now = System.currentTimeMillis();
         if (visible) {
             boolean wasFullyVisible = objectiveVisible && !objectiveHiding;
@@ -140,6 +133,7 @@ public class WildcardDrawOverlay {
                 objectiveTransitionStartTimeMs = now;
             }
             objectiveText = text == null ? "" : text;
+            objectiveHunterText = hunterText == null ? "" : hunterText;
             objectiveStyle = style == null || style.isBlank() ? "runner" : style;
             return;
         }
@@ -260,26 +254,34 @@ public class WildcardDrawOverlay {
             return;
         }
 
+        TextRenderer textRenderer = client.textRenderer;
         int screenWidth = client.getWindow().getScaledWidth();
         int screenHeight = client.getWindow().getScaledHeight();
-        int barWidth = 36;
-        int barHeight = 3;
+        int barWidth = 64;
+        int barHeight = 6;
         int x = screenWidth / 2 - barWidth / 2;
-        int y = screenHeight / 2 + 11;
+        int y = screenHeight / 2 + 14;
         int heat = Math.min(weaponOverheatHeat, weaponOverheatMaxHeat);
         int fillWidth = Math.round(barWidth * (heat / (float) weaponOverheatMaxHeat));
         int fillColor = weaponHeatColor(heat, weaponOverheatMaxHeat);
+        boolean overheated = heat >= weaponOverheatMaxHeat;
+        if (overheated && (System.currentTimeMillis() / 150L) % 2 == 0) {
+            fillColor = 0xFFFFFFFF;
+        }
 
-        context.fill(x - 1, y - 1, x + barWidth + 1, y + barHeight + 1, 0x96000000);
-        context.fill(x, y, x + barWidth, y + barHeight, 0x80161B22);
+        context.fill(x - 1, y - 1, x + barWidth + 1, y + barHeight + 1, 0xA0000000);
+        context.fill(x, y, x + barWidth, y + barHeight, 0x90161B22);
         if (fillWidth > 0) {
             context.fill(x, y, x + fillWidth, y + barHeight, fillColor);
         }
-
         for (int i = 1; i < weaponOverheatMaxHeat; i++) {
             int segmentX = x + Math.round(barWidth * (i / (float) weaponOverheatMaxHeat));
-            context.fill(segmentX, y, segmentX + 1, y + barHeight, 0x70000000);
+            context.fill(segmentX, y, segmentX + 1, y + barHeight, 0x90000000);
         }
+
+        String label = tr(HunterWildcardText.spec(overheated ? "hud.weapon_overheat.overheated" : "hud.weapon_overheat.label", heat, weaponOverheatMaxHeat));
+        int labelWidth = textRenderer.getWidth(label);
+        context.drawText(textRenderer, Text.literal(label), screenWidth / 2 - labelWidth / 2, y + barHeight + 3, overheated ? 0xFFFF6B6B : 0xFFE6EDF3, true);
     }
 
     private static void renderIntroPanel(DrawContext context) {
@@ -346,9 +348,12 @@ public class WildcardDrawOverlay {
         int screenWidth = client.getWindow().getScaledWidth();
         int screenHeight = client.getWindow().getScaledHeight();
         int maxAvailableWidth = Math.max(96, screenWidth - 8);
-        String objectiveDisplayText = tr(objectiveText);
-        int panelWidth = Math.min(Math.min(204, maxAvailableWidth), Math.max(156, textRenderer.getWidth(objectiveDisplayText) + 42));
-        int panelHeight = 36;
+        String objectiveDisplayText = objectiveText.isBlank() ? "" : tr(objectiveText);
+        String hunterDisplayText = objectiveHunterText.isBlank() ? "" : tr(objectiveHunterText);
+        int widest = Math.max(textRenderer.getWidth(objectiveDisplayText), textRenderer.getWidth(hunterDisplayText));
+        int panelWidth = Math.min(Math.min(224, maxAvailableWidth), Math.max(156, widest + 42));
+        boolean twoLines = !objectiveDisplayText.isEmpty() && !hunterDisplayText.isEmpty();
+        int panelHeight = twoLines ? 44 : 36;
         int visualPanelWidth = scaledObjectiveSize(panelWidth);
         int visualPanelHeight = scaledObjectiveSize(panelHeight);
         long elapsed = objectiveTransitionStartTimeMs < 0L ? OBJECTIVE_SLIDE_MS : System.currentTimeMillis() - objectiveTransitionStartTimeMs;
@@ -369,7 +374,7 @@ public class WildcardDrawOverlay {
         int panelY = objectiveBaseY(screenHeight, visualPanelHeight);
         int accent = objectiveAccent(objectiveStyle);
 
-        renderScaledObjectiveStatusPanel(context, textRenderer, panelX, panelY, panelWidth, panelHeight, accent, alpha, objectiveDisplayText);
+        renderScaledObjectiveStatusPanel(context, textRenderer, panelX, panelY, panelWidth, panelHeight, accent, alpha, objectiveDisplayText, hunterDisplayText);
     }
 
     private static void renderObjectiveNoticePanels(DrawContext context) {
@@ -433,7 +438,7 @@ public class WildcardDrawOverlay {
         renderScaledObjectiveNoticePanel(context, textRenderer, entry, panelX, panelY, panelWidth, panelHeight, accent, message);
     }
 
-    private static void renderScaledObjectiveStatusPanel(DrawContext context, TextRenderer textRenderer, int panelX, int panelY, int panelWidth, int panelHeight, int accent, float alpha, String objectiveDisplayText) {
+    private static void renderScaledObjectiveStatusPanel(DrawContext context, TextRenderer textRenderer, int panelX, int panelY, int panelWidth, int panelHeight, int accent, float alpha, String objectiveDisplayText, String hunterDisplayText) {
         var matrices = context.getMatrices();
         matrices.pushMatrix();
         matrices.translate(panelX, panelY);
@@ -445,7 +450,14 @@ public class WildcardDrawOverlay {
 
         context.drawItem(objectiveIcon(objectiveStyle), 8, 10);
         context.drawText(textRenderer, Text.literal(tr(HunterWildcardText.key("hud.objective.status_title"))), 30, 5, withAlpha(accent, alpha), false);
-        context.drawText(textRenderer, Text.literal(trim(textRenderer, objectiveDisplayText, panelWidth - 38)), 30, 20, withAlpha(0xFFFFFFFF, alpha), true);
+        int lineY = 18;
+        if (!objectiveDisplayText.isEmpty()) {
+            context.drawText(textRenderer, Text.literal(trim(textRenderer, objectiveDisplayText, panelWidth - 38)), 30, hunterDisplayText.isEmpty() ? 20 : lineY, withAlpha(0xFFFFFFFF, alpha), true);
+            lineY += 11;
+        }
+        if (!hunterDisplayText.isEmpty()) {
+            context.drawText(textRenderer, Text.literal(trim(textRenderer, hunterDisplayText, panelWidth - 38)), 30, objectiveDisplayText.isEmpty() ? 20 : lineY, withAlpha(0xFFFF8A8A, alpha), true);
+        }
         matrices.popMatrix();
     }
 
@@ -556,33 +568,75 @@ public class WildcardDrawOverlay {
         MinecraftClient client = MinecraftClient.getInstance();
         TextRenderer textRenderer = client.textRenderer;
         int screenWidth = client.getWindow().getScaledWidth();
-        int panelWidth = Math.min(204, Math.max(160, screenWidth - 24));
+        int screenHeight = client.getWindow().getScaledHeight();
+        boolean kill = entry.style.equals("kill");
+        float scale = kill ? KILL_PANEL_SCALE : 1.0F;
+        int panelWidth = Math.min(204, Math.max(160, Math.round((screenWidth - 24) / scale)));
         int panelHeight = 50;
-        int targetX = screenWidth - panelWidth;
-        int targetY = 10 + keyScrambleReservedHeight() + index * (panelHeight + 5);
+        int visualWidth = Math.round(panelWidth * scale);
+        int visualHeight = Math.round(panelHeight * scale);
+        int targetX = screenWidth - visualWidth;
+        int targetY = 10 + keyScrambleReservedHeight() + index * (visualHeight + 5);
         if (Float.isNaN(entry.currentY)) {
             entry.currentY = targetY;
         } else {
             entry.currentY += (targetY - entry.currentY) * 0.35F;
         }
         int panelY = Math.round(entry.currentY);
-        int panelX = feedbackPanelX(screenWidth, panelWidth, targetX, entry, now);
+        int panelX = feedbackPanelX(screenWidth, visualWidth, targetX, entry, now);
         int accent = feedbackAccent(entry.style);
 
-        context.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, 0xE0161B22);
-        context.fill(panelX, panelY, panelX + 3, panelY + panelHeight, accent);
-        context.fill(panelX, panelY, panelX + panelWidth, panelY + 1, accent);
-        context.fill(panelX, panelY + panelHeight - 1, panelX + panelWidth, panelY + panelHeight, accent);
+        if (kill && index == 0) {
+            renderKillFlash(context, screenWidth, screenHeight, now);
+        }
 
-        context.drawItem(feedbackIcon(entry.style), panelX + 10, panelY + 17);
+        var matrices = context.getMatrices();
+        matrices.pushMatrix();
+        matrices.translate(panelX, panelY);
+        matrices.scale(scale, scale);
+        context.fill(0, 0, panelWidth, panelHeight, kill ? 0xF01A0F12 : 0xE0161B22);
+        context.fill(0, 0, kill ? 4 : 3, panelHeight, accent);
+        context.fill(0, 0, panelWidth, 1, accent);
+        context.fill(0, panelHeight - 1, panelWidth, panelHeight, accent);
+        if (kill) {
+            // Short bright pulse across the card right after the kill lands.
+            long elapsed = now - entry.startTimeMs;
+            if (elapsed < KILL_FLASH_MS) {
+                int alpha = Math.round(0x80 * (1.0F - elapsed / (float) KILL_FLASH_MS));
+                context.fill(0, 0, panelWidth, panelHeight, (alpha << 24) | 0xFF3B3B);
+            }
+        }
+
+        context.drawItem(feedbackIcon(entry.style), 10, 17);
         String title = tr(entry.title);
         String line1 = tr(entry.line1);
         String line2 = tr(entry.line2);
-        context.drawText(textRenderer, Text.literal(trim(textRenderer, title, panelWidth - 44)), panelX + 34, panelY + 6, accent, false);
-        context.drawText(textRenderer, Text.literal(trim(textRenderer, line1, panelWidth - 44)), panelX + 34, panelY + 21, 0xFFFFFFFF, true);
+        context.drawText(textRenderer, Text.literal(trim(textRenderer, title, panelWidth - 44)), 34, 6, accent, kill);
+        context.drawText(textRenderer, Text.literal(trim(textRenderer, line1, panelWidth - 44)), 34, 21, 0xFFFFFFFF, true);
         if (!line2.isBlank()) {
-            context.drawText(textRenderer, Text.literal(trim(textRenderer, line2, panelWidth - 44)), panelX + 34, panelY + 36, 0xFFFFD966, false);
+            context.drawText(textRenderer, Text.literal(trim(textRenderer, line2, panelWidth - 44)), 34, 36, 0xFFFFD966, false);
         }
+        matrices.popMatrix();
+    }
+
+    /** Red vignette that fades out over the first few hundred milliseconds after a kill card arrives. */
+    private static void renderKillFlash(DrawContext context, int screenWidth, int screenHeight, long now) {
+        if (killFlashStartMs < 0L) {
+            return;
+        }
+        long elapsed = now - killFlashStartMs;
+        if (elapsed >= KILL_FLASH_MS) {
+            killFlashStartMs = -1L;
+            return;
+        }
+        float strength = 1.0F - elapsed / (float) KILL_FLASH_MS;
+        int alpha = Math.round(0x70 * strength);
+        int color = (alpha << 24) | 0xFF2A2A;
+        int thickness = Math.max(6, Math.min(screenWidth, screenHeight) / 14);
+        context.fill(0, 0, screenWidth, thickness, color);
+        context.fill(0, screenHeight - thickness, screenWidth, screenHeight, color);
+        context.fill(0, thickness, thickness, screenHeight - thickness, color);
+        context.fill(screenWidth - thickness, thickness, screenWidth, screenHeight - thickness, color);
     }
 
     private static int feedbackPanelX(int screenWidth, int panelWidth, int targetX, FeedbackEntry entry, long now) {
@@ -641,6 +695,7 @@ public class WildcardDrawOverlay {
             case "runner" -> 0xFF7FC2FF;
             case "respawn" -> 0xFF77E287;
             case "hunter" -> 0xFFFF8A8A;
+            case "kill" -> 0xFFFF4D4D;
             default -> 0xFFC9D4DE;
         };
     }
@@ -684,6 +739,7 @@ public class WildcardDrawOverlay {
             case "runner" -> new ItemStack(Items.DIAMOND);
             case "respawn" -> new ItemStack(Items.TOTEM_OF_UNDYING);
             case "hunter" -> new ItemStack(Items.IRON_SWORD);
+            case "kill" -> new ItemStack(Items.NETHERITE_SWORD);
             default -> new ItemStack(Items.NETHER_STAR);
         };
     }

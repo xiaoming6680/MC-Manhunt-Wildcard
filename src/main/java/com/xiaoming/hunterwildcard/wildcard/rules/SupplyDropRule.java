@@ -1,6 +1,7 @@
 package com.xiaoming.hunterwildcard.wildcard.rules;
 
 import com.xiaoming.hunterwildcard.game.GameContext;
+import com.xiaoming.hunterwildcard.util.HunterWildcardText;
 import com.xiaoming.hunterwildcard.wildcard.WildcardRule;
 import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
@@ -17,7 +18,10 @@ import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.SoundCategory;
 import net.minecraft.sound.SoundEvents;
+import net.minecraft.text.Text;
+import net.minecraft.util.Formatting;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.Heightmap;
 import net.minecraft.world.World;
 
@@ -31,8 +35,9 @@ import java.util.Random;
 import java.util.UUID;
 
 public class SupplyDropRule implements WildcardRule {
-    private static final int MIN_DISTANCE = 18;
-    private static final int MAX_DISTANCE = 54;
+    private static final int SCATTER_RADIUS = 6;
+    private static final int MAX_CHESTS = 4;
+    private static final int ANNOUNCE_LEAD_TICKS = 20 * 20;
     private static final int DROP_HEIGHT = 44;
     private static final int MAX_FALL_TICKS = 220;
     private static final int LANDING_BEAM_TICKS = 20 * 20;
@@ -96,6 +101,7 @@ public class SupplyDropRule implements WildcardRule {
             new LootEntry(Items.COBWEB, 2, 5)
     );
 
+    private final List<ScheduledDrop> scheduled = new ArrayList<>();
     private int ticks;
 
     public static void tickTrackedDrops(MinecraftServer server) {
@@ -146,41 +152,210 @@ public class SupplyDropRule implements WildcardRule {
     @Override
     public void onStart(GameContext context) {
         ticks = 0;
-        spawnSupplyDrop(context);
+        scheduled.clear();
+        announceSupplyDrop(context);
     }
 
     @Override
     public void onTick(GameContext context, int remainingTicks) {
         ticks++;
         if (remainingTicks > 0 && remainingTicks % context.getConfig().getSupplyDropIntervalTicks() == 0) {
-            spawnSupplyDrop(context);
+            announceSupplyDrop(context);
+        }
+
+        if (scheduled.isEmpty()) {
+            return;
+        }
+        Iterator<ScheduledDrop> iterator = scheduled.iterator();
+        while (iterator.hasNext()) {
+            ScheduledDrop drop = iterator.next();
+            ServerWorld world = context.getServer().getWorld(drop.worldKey());
+            if (world == null) {
+                iterator.remove();
+                continue;
+            }
+            if (ticks >= drop.spawnTick()) {
+                iterator.remove();
+                spawnScheduledDrop(context, world, drop);
+                continue;
+            }
+            if (ticks % 10 == 0) {
+                for (DropPoint point : drop.points()) {
+                    spawnGroundMarker(world, point.landingPos());
+                }
+            }
         }
     }
 
-    private void spawnSupplyDrop(GameContext context) {
-        List<ServerPlayerEntity> players = context.getParticipants();
-        if (players.isEmpty()) {
+    @Override
+    public void onStop(GameContext context) {
+        for (ScheduledDrop drop : scheduled) {
+            ServerWorld world = context.getServer().getWorld(drop.worldKey());
+            if (world != null) {
+                for (BeaconMarker marker : drop.markers()) {
+                    restoreBeaconMarker(world, marker);
+                }
+            }
+        }
+        scheduled.clear();
+    }
+
+    /**
+     * Picks the dimension holding the most participants, aims at the midpoint between the runners' and the
+     * hunters' centres there, and tells everyone where the chests will land 20 seconds ahead of time.
+     */
+    private void announceSupplyDrop(GameContext context) {
+        ServerWorld world = pickWorld(context);
+        if (world == null) {
+            return;
+        }
+        Vec3d center = midpoint(context, world);
+        if (center == null) {
             return;
         }
 
-        ServerPlayerEntity target = players.get(context.getRandom().nextInt(players.size()));
-        ServerWorld world = target.getEntityWorld();
-        DropPoint point = findDropPosition(world, target.getBlockPos(), context.getRandom());
-        if (point == null) {
+        int chestCount = Math.max(1, Math.min(MAX_CHESTS, context.getRunners().size()));
+        List<DropPoint> points = findDropPositions(world, BlockPos.ofFloored(center), chestCount, context.getRandom());
+        if (points.isEmpty()) {
+            return;
+        }
+        List<BeaconMarker> markers = new ArrayList<>();
+        for (DropPoint point : points) {
+            markers.add(createBeaconMarker(world, point.landingPos()));
+        }
+        scheduled.add(new ScheduledDrop(world.getRegistryKey(), points, markers, ticks + ANNOUNCE_LEAD_TICKS));
+
+        BlockPos first = points.get(0).landingPos();
+        Text message = HunterWildcardText.prefixed(HunterWildcardText.translatable(
+                "msg.wildcard.supply_drop.incoming",
+                ANNOUNCE_LEAD_TICKS / 20,
+                first.getX(), first.getY(), first.getZ(),
+                points.size()
+        ).formatted(Formatting.GOLD));
+        for (ServerPlayerEntity player : context.getParticipants()) {
+            player.sendMessage(message, false);
+            player.playSound(SoundEvents.BLOCK_BELL_USE, 1.0F, 1.2F);
+        }
+        for (DropPoint point : points) {
+            playDropStartEffects(world, point.landingPos());
+        }
+    }
+
+    private void spawnScheduledDrop(GameContext context, ServerWorld world, ScheduledDrop drop) {
+        int spawned = 0;
+        BlockPos first = null;
+        for (int i = 0; i < drop.points().size(); i++) {
+            DropPoint point = drop.points().get(i);
+            BeaconMarker marker = drop.markers().get(i);
+            if (!world.getBlockState(point.spawnPos()).isAir()) {
+                restoreBeaconMarker(world, marker);
+                continue;
+            }
+            BlockState chestState = Blocks.CHEST.getDefaultState();
+            if (!world.setBlockState(point.spawnPos(), chestState, Block.NOTIFY_ALL)) {
+                restoreBeaconMarker(world, marker);
+                continue;
+            }
+            FallingBlockEntity fallingChest = FallingBlockEntity.spawnFromBlock(world, point.spawnPos(), chestState);
+            fallingChest.dropItem = false;
+            fallingChest.setGlowing(true);
+            fallingChest.setVelocity(0.0, -0.18, 0.0);
+            ACTIVE_DROPS.add(new ActiveDrop(world.getRegistryKey(), point.landingPos(), point.spawnPos(), fallingChest.getUuid(), marker));
+            playDropStartEffects(world, point.landingPos());
+            spawned++;
+            if (first == null) {
+                first = point.landingPos();
+            }
+        }
+        if (spawned == 0) {
             return;
         }
 
-        BlockState chestState = Blocks.CHEST.getDefaultState();
-        if (!world.setBlockState(point.spawnPos, chestState, Block.NOTIFY_ALL)) {
-            return;
+        Text message = HunterWildcardText.prefixed(HunterWildcardText.translatable(
+                "msg.wildcard.supply_drop.dropping", first.getX(), first.getY(), first.getZ(), spawned
+        ).formatted(Formatting.GOLD));
+        for (ServerPlayerEntity player : context.getParticipants()) {
+            player.sendMessage(message, false);
         }
-        FallingBlockEntity fallingChest = FallingBlockEntity.spawnFromBlock(world, point.spawnPos, chestState);
-        fallingChest.dropItem = false;
-        fallingChest.setGlowing(true);
-        fallingChest.setVelocity(0.0, -0.18, 0.0);
-        ACTIVE_DROPS.add(new ActiveDrop(world.getRegistryKey(), point.landingPos, point.spawnPos, fallingChest.getUuid(), createBeaconMarker(world, point.landingPos)));
+    }
 
-        playDropStartEffects(world, point.landingPos);
+    private static ServerWorld pickWorld(GameContext context) {
+        Map<ServerWorld, Integer> counts = new LinkedHashMap<>();
+        for (ServerPlayerEntity player : context.getParticipants()) {
+            if (player.isAlive() && player.getEntityWorld() instanceof ServerWorld world) {
+                counts.merge(world, 1, Integer::sum);
+            }
+        }
+        ServerWorld best = null;
+        int bestCount = 0;
+        for (Map.Entry<ServerWorld, Integer> entry : counts.entrySet()) {
+            if (entry.getValue() > bestCount) {
+                best = entry.getKey();
+                bestCount = entry.getValue();
+            }
+        }
+        return best;
+    }
+
+    private static Vec3d midpoint(GameContext context, ServerWorld world) {
+        Vec3d runners = centroid(context.getRunners(), world);
+        Vec3d hunters = centroid(context.getHunters(), world);
+        if (runners != null && hunters != null) {
+            return runners.add(hunters).multiply(0.5);
+        }
+        if (runners != null) {
+            return runners;
+        }
+        if (hunters != null) {
+            return hunters;
+        }
+        return centroid(context.getParticipants(), world);
+    }
+
+    private static Vec3d centroid(List<ServerPlayerEntity> players, ServerWorld world) {
+        double x = 0.0;
+        double y = 0.0;
+        double z = 0.0;
+        int count = 0;
+        for (ServerPlayerEntity player : players) {
+            if (player.isAlive() && player.getEntityWorld() == world) {
+                x += player.getX();
+                y += player.getY();
+                z += player.getZ();
+                count++;
+            }
+        }
+        return count == 0 ? null : new Vec3d(x / count, y / count, z / count);
+    }
+
+    private static List<DropPoint> findDropPositions(ServerWorld world, BlockPos center, int count, Random random) {
+        List<DropPoint> points = new ArrayList<>();
+        int maxY = world.getDimension().minY() + world.getDimension().height() - 2;
+        for (int attempt = 0; attempt < 40 && points.size() < count; attempt++) {
+            int dx = attempt == 0 ? 0 : random.nextInt(SCATTER_RADIUS * 2 + 1) - SCATTER_RADIUS;
+            int dz = attempt == 0 ? 0 : random.nextInt(SCATTER_RADIUS * 2 + 1) - SCATTER_RADIUS;
+            BlockPos searchPos = center.add(dx, 0, dz);
+            BlockPos landingPos = world.getTopPosition(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, searchPos);
+            int spawnY = Math.min(landingPos.getY() + DROP_HEIGHT, maxY);
+            if (spawnY <= landingPos.getY() + 8) {
+                continue;
+            }
+            BlockPos spawnPos = new BlockPos(landingPos.getX(), spawnY, landingPos.getZ());
+            if (!world.getBlockState(landingPos).isAir() || !world.getBlockState(landingPos.up()).isAir() || !world.getBlockState(spawnPos).isAir()) {
+                continue;
+            }
+            boolean tooClose = false;
+            for (DropPoint existing : points) {
+                if (existing.landingPos().getManhattanDistance(landingPos) < 2) {
+                    tooClose = true;
+                    break;
+                }
+            }
+            if (!tooClose) {
+                points.add(new DropPoint(landingPos.toImmutable(), spawnPos.toImmutable()));
+            }
+        }
+        return points;
     }
 
     private static boolean tickLandedDrop(ServerWorld world, ActiveDrop drop) {
@@ -218,30 +393,6 @@ public class SupplyDropRule implements WildcardRule {
         world.removeBlock(drop.chestPos, false);
         restoreBeaconMarker(world, drop);
         return true;
-    }
-
-    private DropPoint findDropPosition(ServerWorld world, BlockPos center, Random random) {
-        int maxY = world.getDimension().minY() + world.getDimension().height() - 2;
-        for (int attempt = 0; attempt < 24; attempt++) {
-            int distance = MIN_DISTANCE + random.nextInt(MAX_DISTANCE - MIN_DISTANCE + 1);
-            int dx = random.nextInt(distance * 2 + 1) - distance;
-            int dz = random.nextInt(distance * 2 + 1) - distance;
-            if (Math.abs(dx) < MIN_DISTANCE / 2 && Math.abs(dz) < MIN_DISTANCE / 2) {
-                continue;
-            }
-            BlockPos searchPos = center.add(dx, 0, dz);
-            BlockPos landingPos = world.getTopPosition(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, searchPos);
-            int spawnY = Math.min(landingPos.getY() + DROP_HEIGHT, maxY);
-            if (spawnY <= landingPos.getY() + 8) {
-                continue;
-            }
-            BlockPos spawnPos = new BlockPos(landingPos.getX(), spawnY, landingPos.getZ());
-            if (world.getBlockState(landingPos).isAir() && world.getBlockState(landingPos.up()).isAir() && world.getBlockState(spawnPos).isAir()) {
-                return new DropPoint(landingPos.toImmutable(), spawnPos.toImmutable());
-            }
-        }
-
-        return null;
     }
 
     private static BlockPos findLandedChest(ServerWorld world, BlockPos center) {
@@ -440,21 +591,27 @@ public class SupplyDropRule implements WildcardRule {
     }
 
     private static void restoreBeaconMarker(ServerWorld world, ActiveDrop drop) {
-        if (drop.beaconMarker == null) {
+        restoreBeaconMarker(world, drop.beaconMarker);
+        drop.beaconMarker = null;
+    }
+
+    private static void restoreBeaconMarker(ServerWorld world, BeaconMarker marker) {
+        if (marker == null) {
             return;
         }
-
-        for (Map.Entry<BlockPos, BlockState> entry : drop.beaconMarker.originalStates().entrySet()) {
+        for (Map.Entry<BlockPos, BlockState> entry : marker.originalStates().entrySet()) {
             BlockPos pos = entry.getKey();
             BlockState current = world.getBlockState(pos);
             if (current.isOf(Blocks.BEACON) || current.isOf(Blocks.IRON_BLOCK)) {
                 world.setBlockState(pos, entry.getValue(), Block.NOTIFY_ALL);
             }
         }
-        drop.beaconMarker = null;
     }
 
     private record DropPoint(BlockPos landingPos, BlockPos spawnPos) {
+    }
+
+    private record ScheduledDrop(RegistryKey<World> worldKey, List<DropPoint> points, List<BeaconMarker> markers, int spawnTick) {
     }
 
     private record LootEntry(net.minecraft.item.Item item, int minCount, int maxCount) {

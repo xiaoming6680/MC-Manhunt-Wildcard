@@ -15,6 +15,7 @@ import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import net.minecraft.util.Identifier;
 import net.minecraft.world.World;
+import net.minecraft.world.border.WorldBorder;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -38,6 +39,10 @@ public class WinConditionManager {
     private int nextDistanceThresholdIndex;
     private int pendingDistanceNoticeTicks;
     private int pendingDistanceNoticeDistance = -1;
+    private boolean borderChanged;
+    private double previousBorderSize;
+    private double previousBorderCenterX;
+    private double previousBorderCenterZ;
 
     public void start() {
         resetTracking();
@@ -46,13 +51,43 @@ public class WinConditionManager {
     public void start(GameContext context) {
         resetTracking();
         showInitialObjectiveStatus(context);
+        startSurviveBorder(context);
     }
 
     public void clear(GameContext context) {
         if (context != null) {
             HunterWildcardPackets.sendObjectiveStatus(context, false, "", "");
+            restoreBorder(context);
         }
         clear();
+    }
+
+    /** Survive-time rounds fence the arena with a square world border around spawn, so "just keep running" has a limit. */
+    private void startSurviveBorder(GameContext context) {
+        ModConfig config = context.getConfig();
+        if (config.getRunnerVictoryType() != RunnerVictoryType.SURVIVE_TIME || !config.surviveBorderEnabled) {
+            return;
+        }
+        ServerWorld overworld = context.getServer().getOverworld();
+        WorldBorder border = overworld.getWorldBorder();
+        previousBorderSize = border.getSize();
+        previousBorderCenterX = border.getCenterX();
+        previousBorderCenterZ = border.getCenterZ();
+        borderChanged = true;
+        var spawn = overworld.getSpawnPoint().getPos();
+        border.setCenter(spawn.getX() + 0.5D, spawn.getZ() + 0.5D);
+        border.setSize(config.surviveBorderRadius * 2.0D);
+        broadcastToAll(context, HunterWildcardText.translatable("msg.objective.border_set", config.surviveBorderRadius));
+    }
+
+    private void restoreBorder(GameContext context) {
+        if (!borderChanged) {
+            return;
+        }
+        borderChanged = false;
+        WorldBorder border = context.getServer().getOverworld().getWorldBorder();
+        border.setCenter(previousBorderCenterX, previousBorderCenterZ);
+        border.setSize(previousBorderSize);
     }
 
     public void clear() {

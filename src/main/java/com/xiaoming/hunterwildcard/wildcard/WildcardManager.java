@@ -8,6 +8,7 @@ import com.xiaoming.hunterwildcard.ui.MessageManager;
 import com.xiaoming.hunterwildcard.util.HunterWildcardText;
 import net.minecraft.block.BlockState;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.item.ItemStack;
@@ -17,7 +18,10 @@ import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Random;
 import java.util.UUID;
 
 public class WildcardManager {
@@ -30,10 +34,12 @@ public class WildcardManager {
     private WildcardRule activeRule;
     private WildcardRule pendingRule;
     private Class<?> lastDrawnRuleClass;
+    private final Map<Class<?>, Integer> drawCounts = new HashMap<>();
     private int activeRuleRemainingTicks;
     private int activeRuleDurationTicks;
     private int pendingRuleDrawTicks;
     private int ticksUntilNextWildcard = -1;
+    private boolean stopRequested;
 
     public WildcardManager(BossBarManager bossBarManager, MessageManager messageManager) {
         this.bossBarManager = bossBarManager;
@@ -41,11 +47,22 @@ public class WildcardManager {
     }
 
     public void reset() {
+        drawCounts.clear();
+        lastDrawnRuleClass = null;
         activeRule = null;
         pendingRule = null;
         activeRuleRemainingTicks = 0;
         pendingRuleDrawTicks = 0;
         ticksUntilNextWildcard = -1;
+        stopRequested = false;
+    }
+
+    /**
+     * Lets a rule end itself from inside its own onTick. Stopping synchronously there would null out
+     * activeRule while tick() still uses it, which crashed the server; the stop is applied after onTick.
+     */
+    public void requestStop() {
+        stopRequested = true;
     }
 
     public void tick(GameContext context) {
@@ -60,16 +77,23 @@ public class WildcardManager {
         if (activeRule != null) {
             activeRuleRemainingTicks--;
             activeRule.onTick(context, activeRuleRemainingTicks);
+            if (activeRule == null) {
+                // A rule stopped itself synchronously anyway; nothing left to tick.
+                stopRequested = false;
+                return;
+            }
             bossBarManager.updateWildcardBar(context, activeRule.getName(), activeRuleRemainingTicks, Math.max(1, activeRuleDurationTicks));
 
-            if (activeRuleRemainingTicks <= 0) {
+            if (activeRuleRemainingTicks <= 0 || stopRequested) {
+                stopRequested = false;
                 stopActiveRuleInternal(context, true);
             }
             return;
         }
+        stopRequested = false;
 
         if (ticksUntilNextWildcard < 0) {
-            ticksUntilNextWildcard = context.getConfig().getWildcardIntervalTicks();
+            ticksUntilNextWildcard = rollInterval(context);
         }
 
         ticksUntilNextWildcard--;
@@ -120,6 +144,36 @@ public class WildcardManager {
         }
     }
 
+    public void onBlockBroken(GameContext context, ServerPlayerEntity player, ServerWorld world, BlockPos pos, BlockState state) {
+        if (shouldForwardRuleEvent(context, player)) {
+            activeRule.onBlockBroken(context, player, world, pos, state);
+        }
+    }
+
+    public void onDamageDealt(GameContext context, ServerPlayerEntity attacker, LivingEntity victim, float damageDealt) {
+        if (shouldForwardRuleEvent(context, attacker)) {
+            activeRule.onDamageDealt(context, attacker, victim, damageDealt);
+        }
+    }
+
+    public void onItemDropped(GameContext context, ServerPlayerEntity player, ItemEntity item) {
+        if (shouldForwardRuleEvent(context, player)) {
+            activeRule.onItemDropped(context, player, item);
+        }
+    }
+
+    /** Applies the active rule's damage rescaling when the victim or the attacker takes part in the round. */
+    public float modifyDamage(GameContext context, LivingEntity victim, DamageSource source, float amount) {
+        if (activeRule == null) {
+            return amount;
+        }
+        boolean involved = victim instanceof ServerPlayerEntity victimPlayer && isParticipant(context, victimPlayer);
+        if (!involved && source.getAttacker() instanceof ServerPlayerEntity attacker && isParticipant(context, attacker)) {
+            involved = true;
+        }
+        return involved ? activeRule.modifyDamage(context, victim, source, amount) : amount;
+    }
+
     public void clear(GameContext context) {
         if (activeRule != null) {
             activeRule.onStop(context);
@@ -135,8 +189,8 @@ public class WildcardManager {
     }
 
     public void onConfigChanged(ModConfig config) {
-        if (ticksUntilNextWildcard > config.getWildcardIntervalTicks()) {
-            ticksUntilNextWildcard = config.getWildcardIntervalTicks();
+        if (ticksUntilNextWildcard > config.getMaxWildcardIntervalTicks()) {
+            ticksUntilNextWildcard = config.getMaxWildcardIntervalTicks();
         }
     }
 
@@ -221,17 +275,40 @@ public class WildcardManager {
         }
 
         if (candidates.isEmpty()) {
-            ticksUntilNextWildcard = context.getConfig().getWildcardIntervalTicks();
+            ticksUntilNextWildcard = rollInterval(context);
             messageManager.toParticipants(context, HunterWildcardText.translatable("msg.wildcard.none_available"));
             return false;
         }
 
-        return startRule(context, candidates.get(context.getRandom().nextInt(candidates.size())));
+        return startRule(context, pickWeighted(candidates, context.getRandom()));
+    }
+
+    /** Rules drawn earlier this round weigh less (1 / (1 + times drawn)), so fresh ones surface first. */
+    private WildcardRule pickWeighted(List<WildcardRule> candidates, Random random) {
+        double total = 0.0;
+        double[] weights = new double[candidates.size()];
+        for (int i = 0; i < candidates.size(); i++) {
+            weights[i] = 1.0 / (1 + drawCounts.getOrDefault(candidates.get(i).getClass(), 0));
+            total += weights[i];
+        }
+        double roll = random.nextDouble() * total;
+        for (int i = 0; i < candidates.size(); i++) {
+            roll -= weights[i];
+            if (roll <= 0.0) {
+                return candidates.get(i);
+            }
+        }
+        return candidates.get(candidates.size() - 1);
+    }
+
+    private static int rollInterval(GameContext context) {
+        return context.getConfig().rollWildcardIntervalTicks(context.getRandom());
     }
 
     private boolean startRule(GameContext context, WildcardRule rule) {
         pendingRule = rule;
         lastDrawnRuleClass = pendingRule.getClass();
+        drawCounts.merge(lastDrawnRuleClass, 1, Integer::sum);
         pendingRuleDrawTicks = WILDCARD_DRAW_DELAY_TICKS;
         ticksUntilNextWildcard = -1;
 
@@ -247,7 +324,7 @@ public class WildcardManager {
         activeRule = pendingRule;
         pendingRule = null;
         pendingRuleDrawTicks = 0;
-        activeRuleDurationTicks = Math.max(20, activeRule.getDurationTicks(context.getConfig()));
+        activeRuleDurationTicks = Math.max(20, activeRule.getDurationTicks(context.getConfig(), context.getRandom()));
         activeRuleRemainingTicks = activeRuleDurationTicks;
 
         activeRule.onStart(context);
@@ -264,7 +341,7 @@ public class WildcardManager {
 
         pendingRule = null;
         pendingRuleDrawTicks = 0;
-        ticksUntilNextWildcard = resetInterval ? context.getConfig().getWildcardIntervalTicks() : -1;
+        ticksUntilNextWildcard = resetInterval ? rollInterval(context) : -1;
         bossBarManager.clearWildcardBar();
     }
 
@@ -276,7 +353,7 @@ public class WildcardManager {
 
         activeRule = null;
         activeRuleRemainingTicks = 0;
-        ticksUntilNextWildcard = resetInterval ? context.getConfig().getWildcardIntervalTicks() : -1;
+        ticksUntilNextWildcard = resetInterval ? rollInterval(context) : -1;
         bossBarManager.clearWildcardBar();
         HunterWildcardPackets.clearWildcardIntro(context);
         HunterWildcardPackets.syncAll(context.getServer());

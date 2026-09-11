@@ -8,6 +8,8 @@ import com.xiaoming.hunterwildcard.game.HunterVictoryType;
 import com.xiaoming.hunterwildcard.game.RunnerVictoryType;
 import com.xiaoming.hunterwildcard.respawn.RespawnMode;
 import com.xiaoming.hunterwildcard.respawn.RunnerTeamLossMode;
+import com.xiaoming.hunterwildcard.util.HunterWildcardText;
+import com.xiaoming.hunterwildcard.wildcard.WildcardIds;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.util.Identifier;
 
@@ -17,6 +19,9 @@ import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 public class ModConfig {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -28,9 +33,17 @@ public class ModConfig {
     public int hunterRespawnSeconds = 10;
     public int wildcardIntervalSeconds = 240;
     public int wildcardDurationSeconds = 180;
+    /** FIXED uses the single value above; RANDOM rolls between min and max every time. */
+    public String wildcardIntervalMode = "FIXED";
+    public int wildcardIntervalMinSeconds = 180;
+    public int wildcardIntervalMaxSeconds = 300;
+    public String wildcardDurationMode = "FIXED";
+    public int wildcardDurationMinSeconds = 120;
+    public int wildcardDurationMaxSeconds = 240;
     public int actionBarIntervalSeconds = 1;
-    public int hunterRadarIntervalSeconds = 20;
+    public int hunterRadarWarningDistance = 40;
     public int supplyDropIntervalSeconds = 60;
+    public int spaceShiftIntervalSeconds = 60;
     public int blockDecaySeconds = 10;
     public int pearlFrenzyMaxPearls = 4;
     public int pearlFrenzyIntervalSeconds = 45;
@@ -47,6 +60,24 @@ public class ModConfig {
     public int hunterDamageMultiplierPercent = 100;
     public int hunterSpeedPercent = 100;
     public int runnerSpeedPercent = 100;
+    /** Seconds after a hunter last hit a runner during which any death of that runner still credits the hunter. */
+    public int hunterHitCreditSeconds = 15;
+    /** Pure environment deaths (no hunter involved) needed to count as one hunter kill in kill-count mode. */
+    public int environmentDeathsPerKill = 1;
+    /** Respawn at a random surface spot away from the death point (and, for runners, away from hunters). */
+    public boolean randomRespawnEnabled = true;
+    /** Minimum distance from the death point; the maximum is twice this. */
+    public int runnerRespawnDistance = 150;
+    public int hunterRespawnDistance = 50;
+    /** A respawning hunter is placed at least this far from every runner (best effort). */
+    public int hunterRespawnRunnerClearance = 200;
+    /** Extra respawn seconds per previous hunter death this round (capped at 60 extra). */
+    public int hunterRespawnPenaltySeconds = 5;
+    /** Vanilla locator bar stays on during a round but only shows players of your own side. */
+    public boolean locatorBarTeamOnly = true;
+    /** Survive-time rounds put a square world border of this radius (blocks from spawn) around the arena. */
+    public boolean surviveBorderEnabled = true;
+    public int surviveBorderRadius = 500;
 
     public String runnerVictoryType = "DRAGON";
     public String runnerWinMode = "ANY_ENABLED";
@@ -73,28 +104,8 @@ public class ModConfig {
     public boolean hunterWinByRunnerKillsEnabled = false;
     public int hunterRunnerKillTarget = 10;
 
-    public boolean enableSpeedRush = true;
-    public boolean enableFeatherweight = true;
-    public boolean enableGlowing = true;
-    public boolean enableNightHunt = true;
-    public boolean enableExplosiveDeath = true;
-    public boolean enableSupplyDrop = true;
-    public boolean enableHunterRadar = true;
-    public boolean enableCompassChaos = true;
-    public boolean enableHungerChase = true;
-    public boolean enableWeaponOverheat = true;
-    public boolean enableLightLoad = true;
-    public boolean enableBlockDecay = true;
-    public boolean enablePearlFrenzy = true;
-    public boolean enableWindChargeBrawl = true;
-    public boolean enableBloodRage = true;
-    public boolean enableKeyScramble = true;
-    public boolean enableTinyPlayers = true;
-    public boolean enableFragile = true;
-    public boolean enableWhoAreYou = true;
-    public boolean enableStayAway = true;
-    public boolean enableBackrooms = true;
-    public boolean enableDisabledWildcard = true;
+    /** Wildcard id (snake_case) -> enabled. Missing ids count as enabled. */
+    public Map<String, Boolean> enabledWildcards = new LinkedHashMap<>();
 
     public static ModConfig load() {
         Path path = getConfigPath();
@@ -132,6 +143,9 @@ public class ModConfig {
             if (json == null || !json.has("windChargeExplosionMultiplierPercent")) {
                 config.windChargeExplosionMultiplierPercent = defaults.windChargeExplosionMultiplierPercent;
             }
+            if (json != null) {
+                migrateLegacyWildcardToggles(json, config);
+            }
             config.validate();
             config.save();
             return config;
@@ -142,6 +156,41 @@ public class ModConfig {
             return config;
         }
     }
+
+    /** Older files stored one {@code enableXxx} boolean per wildcard; carry those over for the wildcards that still exist. */
+    private static void migrateLegacyWildcardToggles(JsonObject json, ModConfig config) {
+        if (config.enabledWildcards == null) {
+            config.enabledWildcards = new LinkedHashMap<>();
+        }
+        for (Map.Entry<String, String> legacy : LEGACY_TOGGLE_FIELDS.entrySet()) {
+            if (json.has(legacy.getKey()) && !config.enabledWildcards.containsKey(legacy.getValue())) {
+                try {
+                    config.enabledWildcards.put(legacy.getValue(), json.get(legacy.getKey()).getAsBoolean());
+                } catch (RuntimeException ignored) {
+                    // Malformed legacy value: keep the default (enabled).
+                }
+            }
+        }
+    }
+
+    private static final Map<String, String> LEGACY_TOGGLE_FIELDS = Map.ofEntries(
+            Map.entry("enableExplosiveDeath", "explosive_death"),
+            Map.entry("enableSupplyDrop", "supply_drop"),
+            Map.entry("enableHunterRadar", "hunter_radar"),
+            Map.entry("enableHungerChase", "hunger_chase"),
+            Map.entry("enableWeaponOverheat", "weapon_overheat"),
+            Map.entry("enableLightLoad", "light_load"),
+            Map.entry("enableBlockDecay", "block_decay"),
+            Map.entry("enablePearlFrenzy", "pearl_frenzy"),
+            Map.entry("enableWindChargeBrawl", "wind_charge_brawl"),
+            Map.entry("enableBloodRage", "blood_rage"),
+            Map.entry("enableKeyScramble", "key_scramble"),
+            Map.entry("enableTinyPlayers", "tiny_players"),
+            Map.entry("enableFragile", "fragile"),
+            Map.entry("enableWhoAreYou", "who_are_you"),
+            Map.entry("enableStayAway", "stay_away"),
+            Map.entry("enableBackrooms", "backrooms")
+    );
 
     public boolean save() {
         validate();
@@ -165,9 +214,17 @@ public class ModConfig {
         hunterRespawnSeconds = clampSeconds(hunterRespawnSeconds);
         wildcardIntervalSeconds = clampSeconds(wildcardIntervalSeconds);
         wildcardDurationSeconds = clampSeconds(wildcardDurationSeconds);
+        wildcardIntervalMode = sanitizeTimingMode(wildcardIntervalMode);
+        wildcardDurationMode = sanitizeTimingMode(wildcardDurationMode);
+        wildcardIntervalMinSeconds = clampSeconds(wildcardIntervalMinSeconds);
+        wildcardIntervalMaxSeconds = Math.max(wildcardIntervalMinSeconds, clampSeconds(wildcardIntervalMaxSeconds));
+        wildcardDurationMinSeconds = clampSeconds(wildcardDurationMinSeconds);
+        wildcardDurationMaxSeconds = Math.max(wildcardDurationMinSeconds, clampSeconds(wildcardDurationMaxSeconds));
         actionBarIntervalSeconds = clampSeconds(actionBarIntervalSeconds);
-        hunterRadarIntervalSeconds = clampSeconds(hunterRadarIntervalSeconds);
+        hunterRadarWarningDistance = clampPositive(hunterRadarWarningDistance);
         supplyDropIntervalSeconds = clampSeconds(supplyDropIntervalSeconds);
+        spaceShiftIntervalSeconds = clampSeconds(spaceShiftIntervalSeconds);
+        normalizeWildcardToggles();
         blockDecaySeconds = clampSeconds(blockDecaySeconds);
         pearlFrenzyMaxPearls = clampPositive(pearlFrenzyMaxPearls);
         pearlFrenzyIntervalSeconds = clampSeconds(pearlFrenzyIntervalSeconds);
@@ -180,6 +237,13 @@ public class ModConfig {
         hunterDamageMultiplierPercent = Math.max(1, Math.min(1000, hunterDamageMultiplierPercent));
         hunterSpeedPercent = Math.max(10, Math.min(500, hunterSpeedPercent));
         runnerSpeedPercent = Math.max(10, Math.min(500, runnerSpeedPercent));
+        hunterHitCreditSeconds = Math.max(0, Math.min(120, hunterHitCreditSeconds));
+        environmentDeathsPerKill = clampPositive(environmentDeathsPerKill);
+        runnerRespawnDistance = Math.max(16, Math.min(2000, runnerRespawnDistance));
+        hunterRespawnDistance = Math.max(16, Math.min(2000, hunterRespawnDistance));
+        hunterRespawnRunnerClearance = Math.max(0, Math.min(5000, hunterRespawnRunnerClearance));
+        hunterRespawnPenaltySeconds = Math.max(0, Math.min(60, hunterRespawnPenaltySeconds));
+        surviveBorderRadius = Math.max(16, Math.min(30_000, surviveBorderRadius));
         runnerVictoryType = getRunnerVictoryType().name();
         syncLegacyRunnerWinFields();
         runnerWinMode = sanitizeRunnerWinMode(runnerWinMode);
@@ -209,9 +273,16 @@ public class ModConfig {
         hunterRespawnSeconds = other.hunterRespawnSeconds;
         wildcardIntervalSeconds = other.wildcardIntervalSeconds;
         wildcardDurationSeconds = other.wildcardDurationSeconds;
+        wildcardIntervalMode = other.wildcardIntervalMode;
+        wildcardIntervalMinSeconds = other.wildcardIntervalMinSeconds;
+        wildcardIntervalMaxSeconds = other.wildcardIntervalMaxSeconds;
+        wildcardDurationMode = other.wildcardDurationMode;
+        wildcardDurationMinSeconds = other.wildcardDurationMinSeconds;
+        wildcardDurationMaxSeconds = other.wildcardDurationMaxSeconds;
         actionBarIntervalSeconds = other.actionBarIntervalSeconds;
-        hunterRadarIntervalSeconds = other.hunterRadarIntervalSeconds;
+        hunterRadarWarningDistance = other.hunterRadarWarningDistance;
         supplyDropIntervalSeconds = other.supplyDropIntervalSeconds;
+        spaceShiftIntervalSeconds = other.spaceShiftIntervalSeconds;
         blockDecaySeconds = other.blockDecaySeconds;
         pearlFrenzyMaxPearls = other.pearlFrenzyMaxPearls;
         pearlFrenzyIntervalSeconds = other.pearlFrenzyIntervalSeconds;
@@ -228,6 +299,16 @@ public class ModConfig {
         hunterDamageMultiplierPercent = other.hunterDamageMultiplierPercent;
         hunterSpeedPercent = other.hunterSpeedPercent;
         runnerSpeedPercent = other.runnerSpeedPercent;
+        hunterHitCreditSeconds = other.hunterHitCreditSeconds;
+        environmentDeathsPerKill = other.environmentDeathsPerKill;
+        randomRespawnEnabled = other.randomRespawnEnabled;
+        runnerRespawnDistance = other.runnerRespawnDistance;
+        hunterRespawnDistance = other.hunterRespawnDistance;
+        hunterRespawnRunnerClearance = other.hunterRespawnRunnerClearance;
+        hunterRespawnPenaltySeconds = other.hunterRespawnPenaltySeconds;
+        locatorBarTeamOnly = other.locatorBarTeamOnly;
+        surviveBorderEnabled = other.surviveBorderEnabled;
+        surviveBorderRadius = other.surviveBorderRadius;
         runnerVictoryType = other.runnerVictoryType;
         runnerWinMode = other.runnerWinMode;
         enableDragonWin = other.enableDragonWin;
@@ -251,28 +332,57 @@ public class ModConfig {
         hunterVictoryType = other.hunterVictoryType;
         hunterWinByRunnerKillsEnabled = other.hunterWinByRunnerKillsEnabled;
         hunterRunnerKillTarget = other.hunterRunnerKillTarget;
-        enableSpeedRush = other.enableSpeedRush;
-        enableFeatherweight = other.enableFeatherweight;
-        enableGlowing = other.enableGlowing;
-        enableNightHunt = other.enableNightHunt;
-        enableExplosiveDeath = other.enableExplosiveDeath;
-        enableSupplyDrop = other.enableSupplyDrop;
-        enableHunterRadar = other.enableHunterRadar;
-        enableCompassChaos = other.enableCompassChaos;
-        enableHungerChase = other.enableHungerChase;
-        enableWeaponOverheat = other.enableWeaponOverheat;
-        enableLightLoad = other.enableLightLoad;
-        enableBlockDecay = other.enableBlockDecay;
-        enablePearlFrenzy = other.enablePearlFrenzy;
-        enableWindChargeBrawl = other.enableWindChargeBrawl;
-        enableBloodRage = other.enableBloodRage;
-        enableKeyScramble = other.enableKeyScramble;
-        enableTinyPlayers = other.enableTinyPlayers;
-        enableFragile = other.enableFragile;
-        enableWhoAreYou = other.enableWhoAreYou;
-        enableStayAway = other.enableStayAway;
-        enableBackrooms = other.enableBackrooms;
-        enableDisabledWildcard = other.enableDisabledWildcard;
+        enabledWildcards = new LinkedHashMap<>(other.enabledWildcards);
+        validate();
+    }
+
+    /** Copies only the settings that are safe to change while a round is running. */
+    public void copyLiveFrom(ModConfig other) {
+        hunterRespawnSeconds = other.hunterRespawnSeconds;
+        runnerRespawnSeconds = other.runnerRespawnSeconds;
+        wildcardIntervalSeconds = other.wildcardIntervalSeconds;
+        wildcardDurationSeconds = other.wildcardDurationSeconds;
+        wildcardIntervalMode = other.wildcardIntervalMode;
+        wildcardIntervalMinSeconds = other.wildcardIntervalMinSeconds;
+        wildcardIntervalMaxSeconds = other.wildcardIntervalMaxSeconds;
+        wildcardDurationMode = other.wildcardDurationMode;
+        wildcardDurationMinSeconds = other.wildcardDurationMinSeconds;
+        wildcardDurationMaxSeconds = other.wildcardDurationMaxSeconds;
+        hunterRadarWarningDistance = other.hunterRadarWarningDistance;
+        supplyDropIntervalSeconds = other.supplyDropIntervalSeconds;
+        spaceShiftIntervalSeconds = other.spaceShiftIntervalSeconds;
+        blockDecaySeconds = other.blockDecaySeconds;
+        pearlFrenzyMaxPearls = other.pearlFrenzyMaxPearls;
+        pearlFrenzyIntervalSeconds = other.pearlFrenzyIntervalSeconds;
+        windChargeBrawlIntervalSeconds = other.windChargeBrawlIntervalSeconds;
+        windChargeExplosionMultiplierPercent = other.windChargeExplosionMultiplierPercent;
+        backroomsDurationSeconds = other.backroomsDurationSeconds;
+        runnerDeathNoDrops = other.runnerDeathNoDrops;
+        hunterDeathNoDrops = other.hunterDeathNoDrops;
+        piglinPearlBoostEnabled = other.piglinPearlBoostEnabled;
+        piglinPearlChancePercent = other.piglinPearlChancePercent;
+        hunterDamageMultiplierPercent = other.hunterDamageMultiplierPercent;
+        hunterSpeedPercent = other.hunterSpeedPercent;
+        runnerSpeedPercent = other.runnerSpeedPercent;
+        hunterHitCreditSeconds = other.hunterHitCreditSeconds;
+        environmentDeathsPerKill = other.environmentDeathsPerKill;
+        randomRespawnEnabled = other.randomRespawnEnabled;
+        runnerRespawnDistance = other.runnerRespawnDistance;
+        hunterRespawnDistance = other.hunterRespawnDistance;
+        hunterRespawnRunnerClearance = other.hunterRespawnRunnerClearance;
+        hunterRespawnPenaltySeconds = other.hunterRespawnPenaltySeconds;
+        locatorBarTeamOnly = other.locatorBarTeamOnly;
+        surviveTimeSeconds = other.surviveTimeSeconds;
+        targetDimension = other.targetDimension;
+        targetX = other.targetX;
+        targetY = other.targetY;
+        targetZ = other.targetZ;
+        targetRadius = other.targetRadius;
+        targetItemId = other.targetItemId;
+        targetItemCount = other.targetItemCount;
+        runnerTeamLossMode = other.runnerTeamLossMode;
+        hunterRunnerKillTarget = other.hunterRunnerKillTarget;
+        enabledWildcards = new LinkedHashMap<>(other.enabledWildcards);
         validate();
     }
 
@@ -300,12 +410,51 @@ public class ModConfig {
         return secondsToTicks(wildcardDurationSeconds);
     }
 
+    public boolean isWildcardIntervalRandom() {
+        return "RANDOM".equals(wildcardIntervalMode);
+    }
+
+    public boolean isWildcardDurationRandom() {
+        return "RANDOM".equals(wildcardDurationMode);
+    }
+
+    /** Next gap before a wildcard is drawn: the fixed value, or a fresh roll inside [min, max]. */
+    public int rollWildcardIntervalTicks(java.util.Random random) {
+        if (!isWildcardIntervalRandom()) {
+            return getWildcardIntervalTicks();
+        }
+        return secondsToTicks(rollBetween(random, wildcardIntervalMinSeconds, wildcardIntervalMaxSeconds));
+    }
+
+    /** How long the next wildcard lasts: the fixed value, or a fresh roll inside [min, max]. */
+    public int rollWildcardDurationTicks(java.util.Random random) {
+        if (!isWildcardDurationRandom()) {
+            return getWildcardDurationTicks();
+        }
+        return secondsToTicks(rollBetween(random, wildcardDurationMinSeconds, wildcardDurationMaxSeconds));
+    }
+
+    /** Upper bound of the interval, used to cap a pending countdown when the config shrinks mid-round. */
+    public int getMaxWildcardIntervalTicks() {
+        return secondsToTicks(isWildcardIntervalRandom() ? wildcardIntervalMaxSeconds : wildcardIntervalSeconds);
+    }
+
+    private static int rollBetween(java.util.Random random, int min, int max) {
+        int low = Math.max(1, Math.min(min, max));
+        int high = Math.max(low, Math.max(min, max));
+        return low + random.nextInt(high - low + 1);
+    }
+
+    private static String sanitizeTimingMode(String value) {
+        return value != null && "RANDOM".equalsIgnoreCase(value.trim()) ? "RANDOM" : "FIXED";
+    }
+
     public int getActionBarIntervalTicks() {
         return secondsToTicks(actionBarIntervalSeconds);
     }
 
-    public int getHunterRadarIntervalTicks() {
-        return secondsToTicks(hunterRadarIntervalSeconds);
+    public int getSpaceShiftIntervalTicks() {
+        return secondsToTicks(spaceShiftIntervalSeconds);
     }
 
     public int getSupplyDropIntervalTicks() {
@@ -322,6 +471,10 @@ public class ModConfig {
 
     public int getWindChargeBrawlIntervalTicks() {
         return secondsToTicks(windChargeBrawlIntervalSeconds);
+    }
+
+    public int getHunterHitCreditTicks() {
+        return Math.max(0, hunterHitCreditSeconds) * 20;
     }
 
     public float getHunterDamageMultiplier() {
@@ -369,31 +522,43 @@ public class ModConfig {
     }
 
     public boolean isWildcardEnabled(String ruleName) {
-        return switch (ruleName) {
-            case "speed_rush", "SpeedRush" -> enableSpeedRush;
-            case "featherweight", "Featherweight" -> enableFeatherweight;
-            case "glowing", "Glowing" -> enableGlowing;
-            case "night_hunt", "NightHunt" -> enableNightHunt;
-            case "explosive_death", "ExplosiveDeath" -> enableExplosiveDeath;
-            case "supply_drop", "SupplyDrop" -> enableSupplyDrop;
-            case "hunter_radar", "HunterRadar" -> enableHunterRadar;
-            case "compass_chaos", "CompassChaos" -> enableCompassChaos;
-            case "hunger_chase", "HungerChase" -> enableHungerChase;
-            case "weapon_overheat", "WeaponOverheat" -> enableWeaponOverheat;
-            case "light_load", "LightLoad" -> enableLightLoad;
-            case "block_decay", "BlockDecay" -> enableBlockDecay;
-            case "pearl_frenzy", "PearlFrenzy" -> enablePearlFrenzy;
-            case "wind_charge_brawl", "WindChargeBrawl" -> enableWindChargeBrawl;
-            case "blood_rage", "BloodRage" -> enableBloodRage;
-            case "key_scramble", "KeyScramble" -> enableKeyScramble;
-            case "tiny_players", "TinyPlayers" -> enableTinyPlayers;
-            case "fragile", "Fragile" -> enableFragile;
-            case "who_are_you", "WhoAreYou" -> enableWhoAreYou;
-            case "stay_away", "StayAway" -> enableStayAway;
-            case "backrooms", "Backrooms" -> enableBackrooms;
-            case "disabled_wildcard", "DisabledWildcard", "NoEffect" -> enableDisabledWildcard;
-            default -> false;
-        };
+        String id = normalizeWildcardId(ruleName);
+        if (id == null || !WildcardIds.ALL.contains(id)) {
+            return false;
+        }
+        return enabledWildcards.getOrDefault(id, Boolean.TRUE);
+    }
+
+    public void setWildcardEnabled(String ruleName, boolean enabled) {
+        String id = normalizeWildcardId(ruleName);
+        if (id != null) {
+            enabledWildcards.put(id, enabled);
+        }
+    }
+
+    /** Every registered wildcard gets an explicit entry so the JSON file lists them all; unknown ids are dropped. */
+    private void normalizeWildcardToggles() {
+        Map<String, Boolean> normalized = new LinkedHashMap<>();
+        Map<String, Boolean> current = enabledWildcards == null ? Map.of() : enabledWildcards;
+        for (String id : WildcardIds.ALL) {
+            Boolean value = current.get(id);
+            normalized.put(id, value == null || value);
+        }
+        enabledWildcards = normalized;
+    }
+
+    private static String normalizeWildcardId(String ruleName) {
+        if (ruleName == null || ruleName.isBlank()) {
+            return null;
+        }
+        boolean hasUpper = false;
+        for (int i = 0; i < ruleName.length(); i++) {
+            if (Character.isUpperCase(ruleName.charAt(i))) {
+                hasUpper = true;
+                break;
+            }
+        }
+        return hasUpper ? HunterWildcardText.wildcardId(ruleName) : ruleName;
     }
 
     public static Path getConfigPath() {

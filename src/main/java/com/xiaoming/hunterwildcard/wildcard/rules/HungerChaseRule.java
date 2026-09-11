@@ -1,58 +1,40 @@
 package com.xiaoming.hunterwildcard.wildcard.rules;
 
 import com.xiaoming.hunterwildcard.game.GameContext;
+import com.xiaoming.hunterwildcard.util.HunterWildcardText;
 import com.xiaoming.hunterwildcard.wildcard.WildcardRule;
 import net.minecraft.component.DataComponentTypes;
 import net.minecraft.entity.effect.StatusEffectInstance;
 import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.sound.SoundEvents;
+import net.minecraft.util.Formatting;
 
+/** Eating anything grants Speed VI for ten seconds. Food is now fuel. */
 public class HungerChaseRule implements WildcardRule {
-    private static final int EXHAUSTION_INTERVAL_TICKS = 20;
-    private static final float NORMAL_EXHAUSTION = 0.08F;
-    private static final float LOW_FOOD_EXHAUSTION = 0.03F;
-    private static final int LOW_FOOD_LEVEL = 6;
-    private static final int HUNGER_EFFECT_TICKS = 45;
-    private static final int HUNGER_EFFECT_AMPLIFIER = 1;
-    private static final int LOW_FOOD_SLOWNESS_TICKS = 45;
-    private static final int FOOD_SPEED_TICKS = 100;
-    private static final int HIGH_VALUE_FOOD_SPEED_TICKS = 200;
-
-    @Override
-    public void onTick(GameContext context, int remainingTicks) {
-        if (remainingTicks <= 0 || remainingTicks % EXHAUSTION_INTERVAL_TICKS != 0) {
-            return;
-        }
-
-        for (ServerPlayerEntity player : context.getParticipants()) {
-            int foodLevel = player.getHungerManager().getFoodLevel();
-            player.addExhaustion(foodLevel <= LOW_FOOD_LEVEL ? LOW_FOOD_EXHAUSTION : NORMAL_EXHAUSTION);
-            player.addStatusEffect(new StatusEffectInstance(StatusEffects.HUNGER, HUNGER_EFFECT_TICKS, HUNGER_EFFECT_AMPLIFIER, false, false, true));
-            if (foodLevel <= LOW_FOOD_LEVEL) {
-                player.addStatusEffect(new StatusEffectInstance(StatusEffects.SLOWNESS, LOW_FOOD_SLOWNESS_TICKS, 0, false, false, true));
-            }
-        }
-    }
+    private static final int SPEED_TICKS = 200;
+    private static final int SPEED_AMPLIFIER = 5;
 
     @Override
     public void onPlayerAteFood(GameContext context, ServerPlayerEntity player, ItemStack eatenStack) {
-        if (!isFood(eatenStack)) {
+        if (eatenStack.isEmpty() || !eatenStack.contains(DataComponentTypes.FOOD)) {
             return;
         }
 
-        boolean highValueFood = isHighValueFood(eatenStack);
-        player.addStatusEffect(new StatusEffectInstance(StatusEffects.SPEED, highValueFood ? HIGH_VALUE_FOOD_SPEED_TICKS : FOOD_SPEED_TICKS, highValueFood ? 1 : 0, false, false, true));
+        player.removeStatusEffect(StatusEffects.SPEED);
+        player.addStatusEffect(new StatusEffectInstance(StatusEffects.SPEED, SPEED_TICKS, SPEED_AMPLIFIER, false, false, true));
+        player.playSound(SoundEvents.ENTITY_PLAYER_BURP, 0.8F, 1.4F);
+        player.sendMessage(HunterWildcardText.translatable("msg.wildcard.hunger_chase.boost").formatted(Formatting.GOLD), true);
     }
 
-    private boolean isFood(ItemStack stack) {
-        return !stack.isEmpty() && stack.contains(DataComponentTypes.FOOD);
-    }
-
-    private boolean isHighValueFood(ItemStack stack) {
-        return stack.isOf(Items.GOLDEN_APPLE)
-                || stack.isOf(Items.ENCHANTED_GOLDEN_APPLE)
-                || stack.isOf(Items.GOLDEN_CARROT);
+    @Override
+    public void onStop(GameContext context) {
+        for (ServerPlayerEntity player : context.getParticipants()) {
+            StatusEffectInstance speed = player.getStatusEffect(StatusEffects.SPEED);
+            if (speed != null && speed.getAmplifier() == SPEED_AMPLIFIER) {
+                player.removeStatusEffect(StatusEffects.SPEED);
+            }
+        }
     }
 }

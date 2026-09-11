@@ -16,6 +16,12 @@ Part of the idea comes from the recent APEX Legends wildcard seasons: temporary 
 - Operator-controlled game start, stop, and wildcard testing
 - Preparation phase to prevent messy starts
 - Tracking compass for hunters, refreshed by server config
+- Selectable compass target: sneak + right-click cycles nearest / each runner, right-click opens a menu; the item name shows target and distance
+- Red hunter names, blue runner names; the vanilla locator bar only shows your own side
+- Kill credit: a death within 15 s of a hunter hit counts for that hunter; pure environment deaths convert by count
+- Black-screen death wait, then a random surface respawn away from the death point (runners also away from hunters)
+- Survive-time rounds get a square world border (configurable radius) so runners cannot kite forever
+- Players without a side spectate; several rules can be changed live mid-round
 - Periodic random wildcards shown through HUD, BossBar, and chat messages
 - Multiple runner and hunter win conditions
 - Configurable respawn modes, lives, death drops, and preparation boundary
@@ -88,72 +94,70 @@ When the Backrooms end you drop back over your entry point with no fall damage:
 
 ## Wildcards
 
-| Wildcard | Effect |
-| --- | --- |
-| Speed Rush | Everyone gets a speed boost |
-| Featherweight | Jump boost + slow falling |
-| Glowing | All players glow |
-| Night Hunt | Forced night + hunter night vision |
-| Explosive Death | Deaths or kills trigger explosions |
-| Supply Drop | Random supply chests spawn |
-| Hunter Radar | Hunters get distance hints to the nearest runner |
-| Compass Chaos | Tracking direction is offset |
-| Hunger Chase | Faster hunger, food gives speed changes |
-| Weapon Overheat | Rapid attacks trigger overheat penalties |
-| Light Load | Light armor speeds up, heavy armor slows down |
-| Block Decay | Newly placed blocks vanish after a delay |
-| Pearl Frenzy | Periodic ender pearls with possible side effects |
-| Wind Charge Brawl | Periodic wind charges |
-| Blood Rage | Low health grants buffs |
-| Key Scramble | Every hit shuffles movement keys; a top-right HUD shows the current layout |
-| Tiny Players | Everyone shrinks to about one block tall |
-| Fragile | Everyone's max health drops to three hearts |
-| Who Are You? | Everyone becomes Steve, name tags hide, tab list and chat show "Player" |
-| Stay Away! | Runners get an unbreakable Sharpness 255 golden sword that cannot be dropped or picked up by hunters |
-| Backrooms! | Everyone drops into a yellow maze dimension; hunters glow red for a second every 20 s; fall through a false floor to get home; once a whole side is out everyone returns |
-| Disabled | No extra effect this round; used as a pacing placeholder |
+| Category | Wildcard | Effect |
+| --- | --- | --- |
+| Combat | Backstab | PvP hits only land from behind, at double damage; frontal hits do nothing, not even knockback |
+| Combat | Vampire | Damage dealt to any living thing heals you |
+| Combat | Blood Rage | At three hearts or less every hit you land is lethal |
+| Combat | Weapon Overheat | Rapid attacks build heat; a HUD bar under the crosshair shows it |
+| Combat | Stay Away! | Runners get an unbreakable Sharpness 255 golden sword that cannot be dropped or picked up by hunters |
+| Combat | Fragile | Everyone's max health drops to three hearts |
+| Combat | Explosive Death | Deaths or kills trigger explosions |
+| Combat | Key Scramble | Every hit shuffles movement keys; a top-right HUD shows the current layout |
+| Mobility | Flash | Everyone gets Speed X |
+| Mobility | Shadow Step | Players you hit blink 1-4 blocks away |
+| Mobility | Hurt Teleport | Taking damage teleports you 1-15 blocks away; lava is fair game |
+| Mobility | Space Shift | Every 60 s (configurable) everyone in the same dimension is dealt a random position (possibly their own), with a running countdown |
+| Mobility | Portals | Random pairs each get a one-shot portal (end gateway blocks) that leads to the partner's portal; an odd player joins a random pair |
+| Mobility | Pearl Frenzy | Periodic ender pearls with possible side effects |
+| Mobility | Wind Charge Brawl | Periodic wind charges |
+| Mobility | Light Load | Light armor speeds up, heavy armor slows down |
+| Mobility | Hunger Chase | Eating anything grants 10 s of Speed VI |
+| Vision | Still Glow | Stand still for 1 s and you glow (red hunters, blue runners); moving stops it |
+| Vision | Sneak Freeze | Sneaking makes you invisible and invulnerable, but you cannot move, jump or attack |
+| Vision | Hunter Radar | Runners glow all along; they get a warning when a hunter comes within the configured range |
+| Vision | Who Are You? | Everyone becomes Steve, name tags hide, tab list and chat show "Player" |
+| Vision | Tiny Players | Everyone shrinks to about one block tall |
+| Vision | World Tilt | 30 s after the draw gravity turns sideways (with a countdown) and the view rolls to match, until the wildcard ends |
+| World & Items | Supply Drop | Chests land at the midpoint between the sides (one per runner); a beacon marks the spot 20 s ahead |
+| World & Items | Drop Bomb | Anything thrown from the inventory explodes after 2 s without breaking blocks or destroying drops |
+| World & Items | Chain Mining | Breaking a block also clears the 3x3x3 ahead along your look direction, only what your tool can harvest |
+| World & Items | Block Decay | Newly placed blocks vanish after a delay |
+| World & Items | Backrooms! | Everyone drops into a yellow maze dimension; every 20 s both sides glow for 5 s (hunters red, runners blue); fall through a false floor to get home; once a whole side is out everyone returns |
 
 ## Config Screen
 
-Press `M` by default to open the config screen (rebindable in Controls). Operators can edit rules while the game is waiting. Regular players use it to join a team in the lobby; once the round has started, `M` toggles a compact round status panel instead.
+Press `M` (rebindable) to open the menu at any time. There are only three pages, plus a Debug page for operators.
 
 ### Game page
 
-Current state, your team, wildcard status, and the start button for operators.
+Round status, join hunters or runners, start the round (OP). Once a round is running, a button here toggles the top-left "Round Status" panel.
 
 ![Game page](screenshot/GUI_game.png)
 
-### Teams page
+### Rules page
 
-Join hunters or runners and see both counts.
+A hub with five sub-pages; press "Edit" to open one and use the breadcrumb to go back:
 
-![Teams page](screenshot/GUI_teams.png)
+| Sub-page | Contents |
+| --- | --- |
+| Timing & boundary | preparation time, hunter preparation boundary |
+| Victory | runner victory (dragon, survive time, reach location, collect items) with its parameters, the world border for survive mode, hunter victory (all runners out or kill count) |
+| Respawn & death | respawn modes, lives and timers per side, random respawn point and distances, death drops |
+| Kill credit | how long after a hunter hit a death still counts for that hunter; how many pure environment deaths make one hunter kill |
+| Balance | hunter damage multiplier, movement speed per side, piglin pearl chance, team-only locator bar |
 
-### Basic page
+While a round is running operators can still change the "live" settings (speeds, damage, victory target values, wildcard toggles and parameters, respawn timing and placement, kill credit, drops); saving broadcasts "Rules updated". Preparation time, victory types and respawn modes are locked mid-round.
 
-Preparation and ending time, refresh intervals, preparation boundary, death drops, role balance (hunter-to-runner damage and both speed multipliers), piglin bartering pearl chance.
-
-![Basic page](screenshot/GUI_basic.png)
-
-### Victory page
-
-Pick one runner win condition (kill the dragon, survive time, reach location, collect item) and one hunter win condition (all runners out, kill count).
-
-![Victory page](screenshot/GUI_victory.png)
-
-### Respawn page
-
-Hunter / runner respawn mode, lives, and respawn time.
-
-![Respawn page](screenshot/GUI_respawn.png)
+![Rules page](screenshot/GUI_basic.png)
 
 ### Wildcards page
 
-Set wildcard interval and duration, toggle each wildcard, and tune the ones with extra parameters.
+Wildcard interval and duration, per-wildcard toggles, and sub-pages for wildcards with their own parameters.
 
 ![Wildcards page](screenshot/GUI_wildcards.png)
 
-The **Debug page** requires `/hw debug true` and offers start / stop, roll a wildcard now, and testing any single wildcard.
+The **Debug page** requires `/hw debug true` and offers start / stop, roll now, and testing any single wildcard.
 
 ## Requirements
 
