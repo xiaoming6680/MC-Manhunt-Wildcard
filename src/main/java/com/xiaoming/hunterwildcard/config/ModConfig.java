@@ -36,11 +36,17 @@ public class ModConfig {
     public int pearlFrenzyIntervalSeconds = 45;
     public int windChargeBrawlIntervalSeconds = 5;
     public int windChargeExplosionMultiplierPercent = 180;
+    public int backroomsDurationSeconds = 240;
     public boolean hunterPrepareBoundaryEnabled = true;
     public int hunterPrepareBoundaryRadius = 20;
     public int hunterPrepareBoundaryWarnDistance = 3;
     public boolean runnerDeathNoDrops = false;
     public boolean hunterDeathNoDrops = false;
+    public boolean piglinPearlBoostEnabled = true;
+    public int piglinPearlChancePercent = 40;
+    public int hunterDamageMultiplierPercent = 100;
+    public int hunterSpeedPercent = 100;
+    public int runnerSpeedPercent = 100;
 
     public String runnerVictoryType = "DRAGON";
     public String runnerWinMode = "ANY_ENABLED";
@@ -82,6 +88,12 @@ public class ModConfig {
     public boolean enablePearlFrenzy = true;
     public boolean enableWindChargeBrawl = true;
     public boolean enableBloodRage = true;
+    public boolean enableKeyScramble = true;
+    public boolean enableTinyPlayers = true;
+    public boolean enableFragile = true;
+    public boolean enableWhoAreYou = true;
+    public boolean enableStayAway = true;
+    public boolean enableBackrooms = true;
     public boolean enableDisabledWildcard = true;
 
     public static ModConfig load() {
@@ -161,8 +173,13 @@ public class ModConfig {
         pearlFrenzyIntervalSeconds = clampSeconds(pearlFrenzyIntervalSeconds);
         windChargeBrawlIntervalSeconds = clampSeconds(windChargeBrawlIntervalSeconds);
         windChargeExplosionMultiplierPercent = clampPositive(windChargeExplosionMultiplierPercent);
+        backroomsDurationSeconds = clampSeconds(backroomsDurationSeconds);
         hunterPrepareBoundaryRadius = clampPositive(hunterPrepareBoundaryRadius);
         hunterPrepareBoundaryWarnDistance = Math.max(0, hunterPrepareBoundaryWarnDistance);
+        piglinPearlChancePercent = Math.max(0, Math.min(100, piglinPearlChancePercent));
+        hunterDamageMultiplierPercent = Math.max(1, Math.min(1000, hunterDamageMultiplierPercent));
+        hunterSpeedPercent = Math.max(10, Math.min(500, hunterSpeedPercent));
+        runnerSpeedPercent = Math.max(10, Math.min(500, runnerSpeedPercent));
         runnerVictoryType = getRunnerVictoryType().name();
         syncLegacyRunnerWinFields();
         runnerWinMode = sanitizeRunnerWinMode(runnerWinMode);
@@ -200,11 +217,17 @@ public class ModConfig {
         pearlFrenzyIntervalSeconds = other.pearlFrenzyIntervalSeconds;
         windChargeBrawlIntervalSeconds = other.windChargeBrawlIntervalSeconds;
         windChargeExplosionMultiplierPercent = other.windChargeExplosionMultiplierPercent;
+        backroomsDurationSeconds = other.backroomsDurationSeconds;
         hunterPrepareBoundaryEnabled = other.hunterPrepareBoundaryEnabled;
         hunterPrepareBoundaryRadius = other.hunterPrepareBoundaryRadius;
         hunterPrepareBoundaryWarnDistance = other.hunterPrepareBoundaryWarnDistance;
         runnerDeathNoDrops = other.runnerDeathNoDrops;
         hunterDeathNoDrops = other.hunterDeathNoDrops;
+        piglinPearlBoostEnabled = other.piglinPearlBoostEnabled;
+        piglinPearlChancePercent = other.piglinPearlChancePercent;
+        hunterDamageMultiplierPercent = other.hunterDamageMultiplierPercent;
+        hunterSpeedPercent = other.hunterSpeedPercent;
+        runnerSpeedPercent = other.runnerSpeedPercent;
         runnerVictoryType = other.runnerVictoryType;
         runnerWinMode = other.runnerWinMode;
         enableDragonWin = other.enableDragonWin;
@@ -243,6 +266,12 @@ public class ModConfig {
         enablePearlFrenzy = other.enablePearlFrenzy;
         enableWindChargeBrawl = other.enableWindChargeBrawl;
         enableBloodRage = other.enableBloodRage;
+        enableKeyScramble = other.enableKeyScramble;
+        enableTinyPlayers = other.enableTinyPlayers;
+        enableFragile = other.enableFragile;
+        enableWhoAreYou = other.enableWhoAreYou;
+        enableStayAway = other.enableStayAway;
+        enableBackrooms = other.enableBackrooms;
         enableDisabledWildcard = other.enableDisabledWildcard;
         validate();
     }
@@ -295,6 +324,18 @@ public class ModConfig {
         return secondsToTicks(windChargeBrawlIntervalSeconds);
     }
 
+    public float getHunterDamageMultiplier() {
+        return Math.max(1, hunterDamageMultiplierPercent) / 100.0F;
+    }
+
+    public float getPiglinPearlChance() {
+        return piglinPearlBoostEnabled ? Math.max(0, Math.min(100, piglinPearlChancePercent)) / 100.0F : -1.0F;
+    }
+
+    public int getBackroomsDurationTicks() {
+        return secondsToTicks(backroomsDurationSeconds);
+    }
+
     public float getWindChargeExplosionMultiplier() {
         return Math.max(1, windChargeExplosionMultiplierPercent) / 100.0F;
     }
@@ -344,6 +385,12 @@ public class ModConfig {
             case "pearl_frenzy", "PearlFrenzy" -> enablePearlFrenzy;
             case "wind_charge_brawl", "WindChargeBrawl" -> enableWindChargeBrawl;
             case "blood_rage", "BloodRage" -> enableBloodRage;
+            case "key_scramble", "KeyScramble" -> enableKeyScramble;
+            case "tiny_players", "TinyPlayers" -> enableTinyPlayers;
+            case "fragile", "Fragile" -> enableFragile;
+            case "who_are_you", "WhoAreYou" -> enableWhoAreYou;
+            case "stay_away", "StayAway" -> enableStayAway;
+            case "backrooms", "Backrooms" -> enableBackrooms;
             case "disabled_wildcard", "DisabledWildcard", "NoEffect" -> enableDisabledWildcard;
             default -> false;
         };

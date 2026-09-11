@@ -1,10 +1,12 @@
 package com.xiaoming.hunterwildcard.wildcard;
 
+import com.xiaoming.hunterwildcard.config.ModConfig;
 import com.xiaoming.hunterwildcard.game.GameContext;
 import com.xiaoming.hunterwildcard.util.HunterWildcardText;
 import net.minecraft.block.BlockState;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.item.ItemStack;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -29,6 +31,11 @@ public interface WildcardRule {
         return HunterWildcardText.wildcardDescriptionKey(getName());
     }
 
+    /** How long this rule stays active once drawn. Most rules use the shared config value. */
+    default int getDurationTicks(ModConfig config) {
+        return config.getWildcardDurationTicks();
+    }
+
     default void onStart(GameContext context) {
     }
 
@@ -42,6 +49,9 @@ public interface WildcardRule {
     }
 
     default void onPlayerAttack(GameContext context, ServerPlayerEntity player, Entity target) {
+    }
+
+    default void onPlayerDamaged(GameContext context, ServerPlayerEntity player, DamageSource source, float damageTaken) {
     }
 
     default void onPlayerAteFood(GameContext context, ServerPlayerEntity player, ItemStack eatenStack) {

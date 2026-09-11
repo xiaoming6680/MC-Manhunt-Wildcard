@@ -7,6 +7,7 @@ import com.xiaoming.hunterwildcard.game.HunterVictoryType;
 import com.xiaoming.hunterwildcard.network.HunterWildcardPackets;
 import com.xiaoming.hunterwildcard.team.PlayerRole;
 import com.xiaoming.hunterwildcard.util.HunterWildcardText;
+import com.xiaoming.hunterwildcard.util.PlayerUtil;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
@@ -49,8 +50,8 @@ public class RespawnManager {
                 int remainingKills = Math.max(0, config.hunterRunnerKillTarget - runnerKillCount);
                 HunterWildcardPackets.sendHunterKillFeedback(
                         context,
-                        hunterKiller.getName().getString(),
-                        player.getName().getString(),
+                        PlayerUtil.displayNameSpec(hunterKiller),
+                        PlayerUtil.displayNameSpec(player),
                         remainingKills,
                         runnerKillCount,
                         config.hunterRunnerKillTarget
@@ -153,7 +154,7 @@ public class RespawnManager {
                 HunterWildcardPackets.sendHudFeedback(
                         context,
                         HunterWildcardText.spec("hud.feedback.respawn.title"),
-                        HunterWildcardText.spec("hud.feedback.respawn.player", player.getName().getString()),
+                        HunterWildcardText.spec("hud.feedback.respawn.player", PlayerUtil.displayNameSpec(player)),
                         HunterWildcardText.spec("hud.feedback.respawn.lives", remainingLivesArg(player, role, context.getConfig())),
                         feedbackStyle(role)
                 );
@@ -249,7 +250,7 @@ public class RespawnManager {
     private String runnerLossReason(GameContext context, ServerPlayerEntity outRunner) {
         RunnerTeamLossMode lossMode = context.getConfig().getRunnerTeamLossMode();
         if (lossMode == RunnerTeamLossMode.ANY_RUNNER_OUT) {
-            return HunterWildcardText.spec("msg.win.hunter.runner_out", outRunner.getName().getString());
+            return HunterWildcardText.spec("msg.win.hunter.runner_out", PlayerUtil.displayNameSpec(outRunner));
         }
 
         for (ServerPlayerEntity runner : context.getRunners()) {
@@ -262,16 +263,16 @@ public class RespawnManager {
     }
 
     private Text deathPrefix(ServerPlayerEntity player, PlayerRole role, ServerPlayerEntity hunterKiller, ModConfig config) {
-        String playerName = player.getName().getString();
+        Text playerName = PlayerUtil.displayNameText(player);
         if (role != PlayerRole.RUNNER) {
             return HunterWildcardText.translatable("msg.death.player", role.getDisplayText(), playerName);
         }
 
         if (hunterKiller != null) {
             if (config.getHunterVictoryType() == HunterVictoryType.RUNNER_KILL_COUNT) {
-                return HunterWildcardText.translatable("msg.death.runner_killed_counted", playerName, hunterKiller.getName().getString());
+                return HunterWildcardText.translatable("msg.death.runner_killed_counted", playerName, PlayerUtil.displayNameText(hunterKiller));
             }
-            return HunterWildcardText.translatable("msg.death.runner_killed", playerName, hunterKiller.getName().getString());
+            return HunterWildcardText.translatable("msg.death.runner_killed", playerName, PlayerUtil.displayNameText(hunterKiller));
         }
 
         if (config.getHunterVictoryType() == HunterVictoryType.RUNNER_KILL_COUNT) {

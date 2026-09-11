@@ -1,0 +1,13 @@
+{
+  "variants": {
+    "band=0": {
+      "model": "hunterwildcard:block/backrooms_wall_base"
+    },
+    "band=1": {
+      "model": "hunterwildcard:block/backrooms_wall"
+    },
+    "band=2": {
+      "model": "hunterwildcard:block/backrooms_wall_top"
+    }
+  }
+}

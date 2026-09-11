@@ -1,11 +1,34 @@
 package com.xiaoming.hunterwildcard.util;
 
+import com.xiaoming.hunterwildcard.game.GameManager;
+import com.xiaoming.hunterwildcard.wildcard.rules.WhoAreYouRule;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.text.Text;
 
 import java.util.List;
 
 public final class PlayerUtil {
     private PlayerUtil() {
+    }
+
+    /** Player name as a Text, or the anonymous placeholder while "Who are you?" hides identities. */
+    public static Text displayNameText(ServerPlayerEntity player) {
+        if (isAnonymous(player)) {
+            return HunterWildcardText.translatable("common.anonymous_player");
+        }
+        return player.getName();
+    }
+
+    /** Player name for spec / packet strings; returns the translation key while anonymous so clients localise it. */
+    public static String displayNameSpec(ServerPlayerEntity player) {
+        if (isAnonymous(player)) {
+            return HunterWildcardText.key("common.anonymous_player");
+        }
+        return player.getName().getString();
+    }
+
+    private static boolean isAnonymous(ServerPlayerEntity player) {
+        return WhoAreYouRule.isActive() && GameManager.getInstance().isWildcardParticipant(player);
     }
 
     public static ServerPlayerEntity findNearestRunner(ServerPlayerEntity hunter, List<ServerPlayerEntity> runners) {

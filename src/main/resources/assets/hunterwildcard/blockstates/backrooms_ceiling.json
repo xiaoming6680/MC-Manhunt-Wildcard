@@ -1,0 +1,14 @@
+{
+  "variants": {
+    "": [
+      {
+        "model": "hunterwildcard:block/backrooms_ceiling",
+        "weight": 7
+      },
+      {
+        "model": "hunterwildcard:block/backrooms_ceiling_stained",
+        "weight": 1
+      }
+    ]
+  }
+}

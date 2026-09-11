@@ -6,7 +6,17 @@
     "PlayerEntityDropInventoryMixin",
     "ItemFinishUsingMixin",
     "BlockItemPlaceMixin",
-    "WindChargeEntityMixin"
+    "WindChargeEntityMixin",
+    "PiglinBarterMixin",
+    "PlayerDamageMixin",
+    "PlayerDisplayNameMixin",
+    "ServerPlayerListNameMixin",
+    "PlayerDropItemMixin",
+    "ItemEntityPickupMixin"
+  ],
+  "client": [
+    "client.PlayerListEntrySkinMixin",
+    "client.CameraSinkMixin"
   ],
   "injectors": {
     "defaultRequire": 1

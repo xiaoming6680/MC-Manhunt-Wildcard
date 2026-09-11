@@ -1,0 +1,194 @@
+{
+  "ambientocclusion": false,
+  "textures": {
+    "ceiling": "hunterwildcard:block/backrooms_ceiling",
+    "lamp": "hunterwildcard:block/backrooms_light_off",
+    "particle": "hunterwildcard:block/backrooms_ceiling"
+  },
+  "elements": [
+    {
+      "from": [
+        0,
+        1,
+        0
+      ],
+      "to": [
+        16,
+        16,
+        16
+      ],
+      "faces": {
+        "down": {
+          "texture": "#ceiling"
+        },
+        "up": {
+          "texture": "#ceiling"
+        },
+        "north": {
+          "texture": "#ceiling"
+        },
+        "south": {
+          "texture": "#ceiling"
+        },
+        "west": {
+          "texture": "#ceiling"
+        },
+        "east": {
+          "texture": "#ceiling"
+        }
+      }
+    },
+    {
+      "from": [
+        0,
+        0,
+        0
+      ],
+      "to": [
+        2,
+        1,
+        16
+      ],
+      "faces": {
+        "down": {
+          "texture": "#ceiling"
+        },
+        "up": {
+          "texture": "#ceiling"
+        },
+        "north": {
+          "texture": "#ceiling"
+        },
+        "south": {
+          "texture": "#ceiling"
+        },
+        "west": {
+          "texture": "#ceiling"
+        },
+        "east": {
+          "texture": "#ceiling"
+        }
+      }
+    },
+    {
+      "from": [
+        14,
+        0,
+        0
+      ],
+      "to": [
+        16,
+        1,
+        16
+      ],
+      "faces": {
+        "down": {
+          "texture": "#ceiling"
+        },
+        "up": {
+          "texture": "#ceiling"
+        },
+        "north": {
+          "texture": "#ceiling"
+        },
+        "south": {
+          "texture": "#ceiling"
+        },
+        "west": {
+          "texture": "#ceiling"
+        },
+        "east": {
+          "texture": "#ceiling"
+        }
+      }
+    },
+    {
+      "from": [
+        2,
+        0,
+        0
+      ],
+      "to": [
+        14,
+        1,
+        1
+      ],
+      "faces": {
+        "down": {
+          "texture": "#ceiling"
+        },
+        "up": {
+          "texture": "#ceiling"
+        },
+        "north": {
+          "texture": "#ceiling"
+        },
+        "south": {
+          "texture": "#ceiling"
+        },
+        "west": {
+          "texture": "#ceiling"
+        },
+        "east": {
+          "texture": "#ceiling"
+        }
+      }
+    },
+    {
+      "from": [
+        2,
+        0,
+        15
+      ],
+      "to": [
+        14,
+        1,
+        16
+      ],
+      "faces": {
+        "down": {
+          "texture": "#ceiling"
+        },
+        "up": {
+          "texture": "#ceiling"
+        },
+        "north": {
+          "texture": "#ceiling"
+        },
+        "south": {
+          "texture": "#ceiling"
+        },
+        "west": {
+          "texture": "#ceiling"
+        },
+        "east": {
+          "texture": "#ceiling"
+        }
+      }
+    },
+    {
+      "from": [
+        2,
+        0.75,
+        1
+      ],
+      "to": [
+        14,
+        0.75,
+        15
+      ],
+      "shade": true,
+      "faces": {
+        "down": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": "#lamp"
+        }
+      }
+    }
+  ]
+}

@@ -58,6 +58,7 @@ public class HunterWildcardConfigScreen extends Screen {
     private static final int DROPDOWN_WIDTH = 180;
     private static final int UNIT_WIDTH = 24;
     private static final int CONTROL_HEIGHT = 18;
+    private static final int STACKED_LABEL_HEIGHT = 13;
     private static final int BUTTON_HEIGHT = 22;
     private static final int BUTTON_GAP = 6;
     private static final int HINT_MAX_LINES = 3;
@@ -520,6 +521,26 @@ public class HunterWildcardConfigScreen extends Screen {
                     card.hint(key("screen.hint.death_drops"));
                 }
         );
+        boolean piglinBoostEnabled = editableConfig.piglinPearlBoostEnabled();
+        bottom = addTwoColumnCards(
+                layout,
+                x,
+                bottom,
+                w,
+                key("screen.card.role_balance"),
+                card -> {
+                    card.number(NumberField.HUNTER_DAMAGE_MULTIPLIER_PERCENT);
+                    card.number(NumberField.HUNTER_SPEED_PERCENT);
+                    card.number(NumberField.RUNNER_SPEED_PERCENT);
+                    card.hint(key("screen.hint.role_balance"));
+                },
+                key("screen.card.piglin_bartering"),
+                card -> {
+                    card.booleanField(BooleanField.PIGLIN_PEARL_BOOST_ENABLED);
+                    card.number(NumberField.PIGLIN_PEARL_CHANCE_PERCENT, canEditConfig() && piglinBoostEnabled);
+                    card.hint(piglinBoostEnabled ? key("screen.hint.piglin_bartering") : key("screen.hint.piglin_bartering_disabled"));
+                }
+        );
 
         markContentBottom(layout, bottom);
     }
@@ -836,10 +857,11 @@ public class HunterWildcardConfigScreen extends Screen {
                 new ButtonSpec(key("screen.button.enable_all_wildcards"), widget -> setAllWildcards(true), ButtonVariant.NORMAL, canEditConfig(), key("screen.tooltip.enable_all_wildcards")),
                 new ButtonSpec(key("screen.button.disable_all_wildcards"), widget -> setAllWildcards(false), ButtonVariant.DANGER, canEditConfig(), key("screen.tooltip.disable_all_wildcards"))
         );
-        if (cardWidth >= 236) {
-            int buttonWidth = 82;
-            int buttonHeight = 18;
-            int totalWidth = buttonWidth * buttons.size() + BUTTON_GAP * (buttons.size() - 1);
+        int buttonWidth = 82;
+        int buttonHeight = 18;
+        int totalWidth = buttonWidth * buttons.size() + BUTTON_GAP * (buttons.size() - 1);
+        int titleWidth = textRenderer.getWidth(tr(key("screen.card.wildcard_toggles")));
+        if (cardWidth >= CARD_PADDING_X * 2 + titleWidth + 12 + totalWidth) {
             int buttonX = cardX + cardWidth - CARD_PADDING_X - totalWidth;
             int buttonY = cardY + CARD_PADDING_TOP - 3;
             for (int i = 0; i < buttons.size(); i++) {
@@ -891,6 +913,10 @@ public class HunterWildcardConfigScreen extends Screen {
                 card.number(NumberField.WIND_CHARGE_EXPLOSION_MULTIPLIER_PERCENT, canEditConfig());
                 card.hint(key("screen.hint.wind_charge_brawl_settings"));
             }
+            case BACKROOMS -> {
+                card.number(NumberField.BACKROOMS_DURATION_SECONDS, canEditConfig());
+                card.hint(key("screen.hint.backrooms_settings"));
+            }
             default -> card.hint(key("screen.hint.no_wildcard_settings"));
         }
         card.button(key("screen.button.back_to_wildcards"), widget -> closeWildcardSettings(), ButtonVariant.NORMAL, true, 132);
@@ -927,10 +953,8 @@ public class HunterWildcardConfigScreen extends Screen {
         if (isVisibleInContentPartial(layout, y, height)) {
             boxes.add(new Box(x, y, width, height, 0x77303A46, block.color()));
         }
-        if (isVisibleInContent(layout, y + 9, textRenderer.fontHeight)) {
+        if (isVisibleInContentPartial(layout, y, height)) {
             labels.add(new Label(block.label(), x + 8, y + 7, 0xFF9FAAB4, false, Math.max(20, width - 16)));
-        }
-        if (isVisibleInContent(layout, y + 27, textRenderer.fontHeight)) {
             labels.add(new Label(block.value(), x + 8, y + 27, block.color(), true, Math.max(20, width - 16)));
         }
     }
@@ -943,13 +967,6 @@ public class HunterWildcardConfigScreen extends Screen {
         for (StatusBlock block : blocks) {
             int textWidth = textRenderer.getWidth(tr(spec("screen.status_pill", tr(block.label()), tr(block.value()))));
             pillWidths.add(Math.min(190, Math.max(88, textWidth + 24)));
-        }
-        int totalWidth = pillWidths.stream().mapToInt(Integer::intValue).sum() + gap * Math.max(0, blocks.size() - 1);
-        if (blocks.size() == 5 && totalWidth > width) {
-            int compactWidth = Math.max(72, (width - gap * 4) / 5);
-            for (int i = 0; i < pillWidths.size(); i++) {
-                pillWidths.set(i, compactWidth);
-            }
         }
 
         int index = 0;
@@ -990,9 +1007,9 @@ public class HunterWildcardConfigScreen extends Screen {
         String label = spec("screen.label_colon", tr(block.label()));
         int labelWidth = Math.min(textRenderer.getWidth(tr(label)), Math.max(20, width / 2));
         int textY = y + Math.max(4, (height - textRenderer.fontHeight) / 2);
-        if (isVisibleInContent(layout, y, height)) {
+        if (isVisibleInContentPartial(layout, y, height)) {
             labels.add(new Label(label, x + 8, textY, 0xFF9FAAB4, false, labelWidth));
-            labels.add(new Label(block.value(), x + 8 + labelWidth, textY, block.color(), true, Math.max(20, width - labelWidth - 14)));
+            labels.add(new Label(block.value(), x + 8 + labelWidth + 4, textY, block.color(), true, Math.max(20, width - labelWidth - 18)));
         }
     }
 
@@ -1094,7 +1111,7 @@ public class HunterWildcardConfigScreen extends Screen {
         int buttonWidth = Math.min(96, Math.max(78, width / 3));
         int textWidth = Math.max(40, width - buttonWidth - 24);
         addContentLabel(layout, title, x + 10, y + 9, accent, true);
-        if (isVisibleInContent(layout, y + 9, textRenderer.fontHeight)) {
+        if (isVisibleInContentPartial(layout, y, height)) {
             labels.add(new Label(current ? key("screen.team.current_side") : key("screen.team.can_join"), x + Math.max(66, textRenderer.getWidth(tr(title)) + 18), y + 9, current ? 0xFF77E287 : 0xFF9FAAB4, false, Math.max(40, textWidth - 62)));
         }
         addContentLabel(layout, spec("screen.team.current_count", count), x + 10, y + 29, 0xFFC9D4DE, false);
@@ -1125,9 +1142,13 @@ public class HunterWildcardConfigScreen extends Screen {
         int firstLineWidth = textRenderer.getWidth(wrapLabelText(tr(field.label), desiredTextWidth, 2).get(0));
         int infoX = Math.min(labelX + Math.min(firstLineWidth, desiredTextWidth) + infoGap, Math.max(labelX, maxInfoX));
         int textWidth = Math.max(8, infoX - labelX - infoGap);
-        if (isVisibleInContent(layout, y, height)) {
+        if (isVisibleInContentPartial(layout, y, height)) {
             icons.add(new Icon(WildcardIcons.iconFor(field.id), iconX, iconY));
             wrappedLabels.add(new WrappedLabel(field.label, labelX, y, height, enabled ? 0xFFFFFFFF : 0xFFC9D4DE, false, textWidth, 2));
+        }
+        if (!isVisibleInContent(layout, y, height)) {
+            // Widgets are not clipped by the scissor; only show the tile's buttons once the whole tile is in view.
+            return;
         }
         addContentButton(
                 layout,
@@ -1192,6 +1213,12 @@ public class HunterWildcardConfigScreen extends Screen {
             case PEARL_FRENZY -> spec("screen.wildcard_info.pearl_frenzy", configuredCount(config == null ? 4 : config.pearlFrenzyMaxPearls()), configuredCount(config == null ? 45 : config.pearlFrenzyIntervalSeconds()));
             case WIND_CHARGE_BRAWL -> spec("screen.wildcard_info.wind_charge_brawl", configuredCount(config == null ? 5 : config.windChargeBrawlIntervalSeconds()), configuredPercent(config == null ? 180 : config.windChargeExplosionMultiplierPercent()));
             case BLOOD_RAGE -> key("screen.wildcard_info.blood_rage");
+            case KEY_SCRAMBLE -> key("screen.wildcard_info.key_scramble");
+            case TINY_PLAYERS -> key("screen.wildcard_info.tiny_players");
+            case FRAGILE -> key("screen.wildcard_info.fragile");
+            case WHO_ARE_YOU -> key("screen.wildcard_info.who_are_you");
+            case STAY_AWAY -> key("screen.wildcard_info.stay_away");
+            case BACKROOMS -> spec("screen.wildcard_info.backrooms", configuredCount(config == null ? 240 : config.backroomsDurationSeconds()));
             case DISABLED_WILDCARD -> key("screen.wildcard_info.disabled_wildcard");
         };
     }
@@ -1238,7 +1265,7 @@ public class HunterWildcardConfigScreen extends Screen {
         int valueX = x + Math.max(92, Math.min(LABEL_WIDTH, width / 2));
         int labelY = y + Math.max(3, (ROW_HEIGHT - textRenderer.fontHeight) / 2);
         addContentLabel(layout, spec("screen.label_colon", tr(label)), x, labelY, 0xFFC9D4DE, false);
-        if (isVisibleInContent(layout, y, textRenderer.fontHeight)) {
+        if (isVisibleInContentPartial(layout, y, ROW_HEIGHT)) {
             labels.add(new Label(value, valueX, labelY, valueColor, false, Math.max(40, width - (valueX - x))));
         }
         return nextRowY(y);
@@ -1249,13 +1276,46 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private int addInputRow(Layout layout, NumberField field, int x, int y, int width, boolean editable) {
-        addContentNumberField(layout, field, x, y, width, CONTROL_HEIGHT, editable);
-        return nextRowY(y);
+        int unitSpace = numberUnitSpace(field);
+        int fieldWidth = numberFieldWidth(field, width, unitSpace);
+        if (labelFits(field.label, formLabelWidth(width, fieldWidth, unitSpace))) {
+            addContentNumberField(layout, field, x, y, width, CONTROL_HEIGHT, editable, true);
+            return nextRowY(y);
+        }
+
+        addStackedLabel(layout, field.label, x, y, width);
+        int controlRow = y + STACKED_LABEL_HEIGHT;
+        addContentNumberField(layout, field, x, controlRow, width, CONTROL_HEIGHT, editable, false);
+        return nextRowY(controlRow);
     }
 
     private int addInputRow(Layout layout, StringField field, int x, int y, int width) {
-        addContentStringField(layout, field, x, y, width, CONTROL_HEIGHT);
-        return nextRowY(y);
+        int fieldWidth = textFieldWidth(width);
+        if (labelFits(field.label, width - fieldWidth - 8)) {
+            addContentStringField(layout, field, x, y, width, CONTROL_HEIGHT, true);
+            return nextRowY(y);
+        }
+
+        addStackedLabel(layout, field.label, x, y, width);
+        int controlRow = y + STACKED_LABEL_HEIGHT;
+        addContentStringField(layout, field, x, controlRow, width, CONTROL_HEIGHT, false);
+        return nextRowY(controlRow);
+    }
+
+    private boolean labelFits(String labelKey, int availableWidth) {
+        return textRenderer.getWidth(tr(spec("screen.label_colon", labelKey))) <= availableWidth;
+    }
+
+    private void addStackedLabel(Layout layout, String labelKey, int x, int y, int width) {
+        addContentLabel(layout, spec("screen.label_colon", labelKey), x, y + 2, 0xFFC9D4DE, false);
+    }
+
+    private int numberUnitSpace(NumberField field) {
+        if (field.unit.isBlank()) {
+            return 0;
+        }
+        int unitTextWidth = Math.min(UNIT_WIDTH, Math.max(18, textRenderer.getWidth(tr(field.unit))));
+        return unitTextWidth + 8;
     }
 
     private int addCoordinateRow(Layout layout, NumberField xField, NumberField yField, NumberField zField, int x, int y, int width) {
@@ -1292,10 +1352,18 @@ public class HunterWildcardConfigScreen extends Screen {
     private int addDropdownRow(Layout layout, DropdownField field, int x, int y, int width, boolean editable) {
         int dropdownWidth = dropdownWidth(width);
         int dropdownX = x + width - dropdownWidth;
-        int labelY = y + Math.max(3, (ROW_HEIGHT - textRenderer.fontHeight) / 2);
-        labels.add(new Label(spec("screen.label_colon", field.label), x, labelY, 0xFFC9D4DE, false, Math.max(10, dropdownX - x - 8)));
-        addContentDropdownField(layout, field, dropdownX, controlY(y), dropdownWidth, CONTROL_HEIGHT, editable);
-        return nextRowY(y);
+        if (labelFits(field.label, dropdownX - x - 8)) {
+            int labelY = y + Math.max(3, (ROW_HEIGHT - textRenderer.fontHeight) / 2);
+            addContentLabel(layout, spec("screen.label_colon", field.label), x, labelY, 0xFFC9D4DE, false);
+            addContentDropdownField(layout, field, dropdownX, controlY(y), dropdownWidth, CONTROL_HEIGHT, editable);
+            return nextRowY(y);
+        }
+
+        addStackedLabel(layout, field.label, x, y, width);
+        int controlRow = y + STACKED_LABEL_HEIGHT;
+        int fullWidth = Math.min(width, Math.max(dropdownWidth, DROPDOWN_WIDTH + 40));
+        addContentDropdownField(layout, field, x + width - fullWidth, controlY(controlRow), fullWidth, CONTROL_HEIGHT, editable);
+        return nextRowY(controlRow);
     }
 
     private int addToggleRow(Layout layout, BooleanField field, int x, int y, int width) {
@@ -1398,13 +1466,20 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private void addNumberField(NumberField field, int x, int y, int width, int fieldHeight, boolean editable) {
+        addNumberField(field, x, y, width, fieldHeight, editable, true);
+    }
+
+    private void addNumberField(NumberField field, int x, int y, int width, int fieldHeight, boolean editable, boolean showLabel) {
         boolean fieldEditable = editable && canEditConfig();
-        int unitTextWidth = field.unit.isBlank() ? 0 : Math.min(UNIT_WIDTH, Math.max(18, textRenderer.getWidth(tr(field.unit))));
-        int unitSpace = field.unit.isBlank() ? 0 : unitTextWidth + 8;
-        int fieldWidth = numberFieldWidth(field, width, unitSpace);
+        int unitSpace = numberUnitSpace(field);
+        int fieldWidth = showLabel
+                ? numberFieldWidth(field, width, unitSpace)
+                : Math.max(34, Math.min(field.allowsNegative() ? 96 : CONTROL_WIDTH, width - unitSpace));
         int fieldX = x + width - fieldWidth - unitSpace;
         int labelY = y + Math.max(3, (fieldHeight - textRenderer.fontHeight) / 2);
-        labels.add(new Label(spec("screen.label_colon", field.label), x, labelY, 0xFFC9D4DE, false, formLabelWidth(width, fieldWidth, unitSpace)));
+        if (showLabel) {
+            labels.add(new Label(spec("screen.label_colon", field.label), x, labelY, 0xFFC9D4DE, false, formLabelWidth(width, fieldWidth, unitSpace)));
+        }
         if (!field.unit.isBlank()) {
             labels.add(new Label(field.unit, fieldX + fieldWidth + 8, labelY, fieldEditable ? 0xFFC9D4DE : 0xFF7D8790));
         }
@@ -1434,11 +1509,13 @@ public class HunterWildcardConfigScreen extends Screen {
         return fieldX + fieldWidth;
     }
 
-    private void addStringField(StringField field, int x, int y, int width, int fieldHeight) {
-        int fieldWidth = textFieldWidth(width);
+    private void addStringField(StringField field, int x, int y, int width, int fieldHeight, boolean showLabel) {
+        int fieldWidth = showLabel ? textFieldWidth(width) : Math.min(width, 220);
         int fieldX = x + width - fieldWidth;
         int labelY = y + Math.max(3, (fieldHeight - textRenderer.fontHeight) / 2);
-        labels.add(new Label(spec("screen.label_colon", field.label), x, labelY, 0xFFC9D4DE, false, Math.max(10, fieldX - x - 8)));
+        if (showLabel) {
+            labels.add(new Label(spec("screen.label_colon", field.label), x, labelY, 0xFFC9D4DE, false, Math.max(10, fieldX - x - 8)));
+        }
 
         TextFieldWidget textField = new TextFieldWidget(textRenderer, fieldX, y, fieldWidth, fieldHeight, text(field.label));
         textField.setMaxLength(field.maxLength);
@@ -1528,7 +1605,7 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private void addContentLabel(Layout layout, String text, int x, int y, int color, boolean shadow) {
-        if (isVisibleInContent(layout, y, textRenderer.fontHeight)) {
+        if (isVisibleInContentPartial(layout, y, textRenderer.fontHeight)) {
             labels.add(new Label(text, x, y, color, shadow));
         }
     }
@@ -1567,14 +1644,22 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private void addContentNumberField(Layout layout, NumberField field, int x, int y, int width, int fieldHeight, boolean editable) {
+        addContentNumberField(layout, field, x, y, width, fieldHeight, editable, true);
+    }
+
+    private void addContentNumberField(Layout layout, NumberField field, int x, int y, int width, int fieldHeight, boolean editable, boolean showLabel) {
         if (isVisibleInContent(layout, y, ROW_HEIGHT)) {
-            addNumberField(field, x, controlY(y), width, fieldHeight, editable);
+            addNumberField(field, x, controlY(y), width, fieldHeight, editable, showLabel);
         }
     }
 
     private void addContentStringField(Layout layout, StringField field, int x, int y, int width, int fieldHeight) {
+        addContentStringField(layout, field, x, y, width, fieldHeight, true);
+    }
+
+    private void addContentStringField(Layout layout, StringField field, int x, int y, int width, int fieldHeight, boolean showLabel) {
         if (isVisibleInContent(layout, y, ROW_HEIGHT)) {
-            addStringField(field, x, controlY(y), width, fieldHeight);
+            addStringField(field, x, controlY(y), width, fieldHeight, showLabel);
         }
     }
 
@@ -1848,6 +1933,18 @@ public class HunterWildcardConfigScreen extends Screen {
             }
         }
         return false;
+    }
+
+    /** Test hook: switch to a page by enum name (GAME, TEAM, BASIC, VICTORY, RESPAWN, WILDCARD, DEBUG). */
+    public void selectPageForTesting(String pageName) {
+        switchPage(Page.valueOf(pageName));
+    }
+
+    /** Test hook: scroll the content area by the given number of pixels. */
+    public void scrollForTesting(float pixels) {
+        targetScrollOffset = clamp(targetScrollOffset + pixels, 0.0F, maxScroll);
+        scrollOffset = targetScrollOffset;
+        clearAndInit();
     }
 
     private void switchPage(Page page) {
@@ -2286,8 +2383,13 @@ public class HunterWildcardConfigScreen extends Screen {
             case PEARL_FRENZY_INTERVAL_SECONDS -> config.pearlFrenzyIntervalSeconds();
             case WIND_CHARGE_BRAWL_INTERVAL_SECONDS -> config.windChargeBrawlIntervalSeconds();
             case WIND_CHARGE_EXPLOSION_MULTIPLIER_PERCENT -> config.windChargeExplosionMultiplierPercent();
+            case BACKROOMS_DURATION_SECONDS -> config.backroomsDurationSeconds();
             case HUNTER_PREPARE_BOUNDARY_RADIUS -> config.hunterPrepareBoundaryRadius();
             case HUNTER_PREPARE_BOUNDARY_WARN_DISTANCE -> config.hunterPrepareBoundaryWarnDistance();
+            case PIGLIN_PEARL_CHANCE_PERCENT -> config.piglinPearlChancePercent();
+            case HUNTER_DAMAGE_MULTIPLIER_PERCENT -> config.hunterDamageMultiplierPercent();
+            case HUNTER_SPEED_PERCENT -> config.hunterSpeedPercent();
+            case RUNNER_SPEED_PERCENT -> config.runnerSpeedPercent();
             case SURVIVE_TIME_SECONDS -> config.surviveTimeSeconds();
             case TARGET_X -> config.targetX();
             case TARGET_Y -> config.targetY();
@@ -2318,8 +2420,13 @@ public class HunterWildcardConfigScreen extends Screen {
             case PEARL_FRENZY_INTERVAL_SECONDS -> copy.pearlFrenzyIntervalSeconds = value;
             case WIND_CHARGE_BRAWL_INTERVAL_SECONDS -> copy.windChargeBrawlIntervalSeconds = value;
             case WIND_CHARGE_EXPLOSION_MULTIPLIER_PERCENT -> copy.windChargeExplosionMultiplierPercent = value;
+            case BACKROOMS_DURATION_SECONDS -> copy.backroomsDurationSeconds = value;
             case HUNTER_PREPARE_BOUNDARY_RADIUS -> copy.hunterPrepareBoundaryRadius = value;
             case HUNTER_PREPARE_BOUNDARY_WARN_DISTANCE -> copy.hunterPrepareBoundaryWarnDistance = value;
+            case PIGLIN_PEARL_CHANCE_PERCENT -> copy.piglinPearlChancePercent = value;
+            case HUNTER_DAMAGE_MULTIPLIER_PERCENT -> copy.hunterDamageMultiplierPercent = value;
+            case HUNTER_SPEED_PERCENT -> copy.hunterSpeedPercent = value;
+            case RUNNER_SPEED_PERCENT -> copy.runnerSpeedPercent = value;
             case SURVIVE_TIME_SECONDS -> copy.surviveTimeSeconds = value;
             case TARGET_X -> copy.targetX = value;
             case TARGET_Y -> copy.targetY = value;
@@ -2392,6 +2499,12 @@ public class HunterWildcardConfigScreen extends Screen {
             case PEARL_FRENZY -> config.enablePearlFrenzy();
             case WIND_CHARGE_BRAWL -> config.enableWindChargeBrawl();
             case BLOOD_RAGE -> config.enableBloodRage();
+            case KEY_SCRAMBLE -> config.enableKeyScramble();
+            case TINY_PLAYERS -> config.enableTinyPlayers();
+            case FRAGILE -> config.enableFragile();
+            case WHO_ARE_YOU -> config.enableWhoAreYou();
+            case STAY_AWAY -> config.enableStayAway();
+            case BACKROOMS -> config.enableBackrooms();
             case DISABLED_WILDCARD -> config.enableDisabledWildcard();
         };
     }
@@ -2414,6 +2527,12 @@ public class HunterWildcardConfigScreen extends Screen {
             case PEARL_FRENZY -> copy.enablePearlFrenzy = value;
             case WIND_CHARGE_BRAWL -> copy.enableWindChargeBrawl = value;
             case BLOOD_RAGE -> copy.enableBloodRage = value;
+            case KEY_SCRAMBLE -> copy.enableKeyScramble = value;
+            case TINY_PLAYERS -> copy.enableTinyPlayers = value;
+            case FRAGILE -> copy.enableFragile = value;
+            case WHO_ARE_YOU -> copy.enableWhoAreYou = value;
+            case STAY_AWAY -> copy.enableStayAway = value;
+            case BACKROOMS -> copy.enableBackrooms = value;
             case DISABLED_WILDCARD -> copy.enableDisabledWildcard = value;
         }
         copy.validate();
@@ -2425,6 +2544,7 @@ public class HunterWildcardConfigScreen extends Screen {
             case HUNTER_PREPARE_BOUNDARY_ENABLED -> config.hunterPrepareBoundaryEnabled();
             case RUNNER_DEATH_NO_DROPS -> config.runnerDeathNoDrops();
             case HUNTER_DEATH_NO_DROPS -> config.hunterDeathNoDrops();
+            case PIGLIN_PEARL_BOOST_ENABLED -> config.piglinPearlBoostEnabled();
         };
     }
 
@@ -2434,6 +2554,7 @@ public class HunterWildcardConfigScreen extends Screen {
             case HUNTER_PREPARE_BOUNDARY_ENABLED -> copy.hunterPrepareBoundaryEnabled = value;
             case RUNNER_DEATH_NO_DROPS -> copy.runnerDeathNoDrops = value;
             case HUNTER_DEATH_NO_DROPS -> copy.hunterDeathNoDrops = value;
+            case PIGLIN_PEARL_BOOST_ENABLED -> copy.piglinPearlBoostEnabled = value;
         }
         copy.validate();
         return ConfigSnapshot.from(copy);
@@ -2473,7 +2594,8 @@ public class HunterWildcardConfigScreen extends Screen {
                 || field == ToggleField.SUPPLY_DROP
                 || field == ToggleField.BLOCK_DECAY
                 || field == ToggleField.PEARL_FRENZY
-                || field == ToggleField.WIND_CHARGE_BRAWL;
+                || field == ToggleField.WIND_CHARGE_BRAWL
+                || field == ToggleField.BACKROOMS;
     }
 
     private int enabledWildcardCount(ConfigSnapshot config) {
@@ -2771,8 +2893,7 @@ public class HunterWildcardConfigScreen extends Screen {
         }
 
         void number(NumberField field, boolean editable) {
-            addInputRow(layout, field, contentX(), cursorY, contentWidth(), editable);
-            advanceRow();
+            advanceTo(addInputRow(layout, field, contentX(), cursorY, contentWidth(), editable));
         }
 
         void coordinates(NumberField xField, NumberField yField, NumberField zField) {
@@ -2797,8 +2918,7 @@ public class HunterWildcardConfigScreen extends Screen {
         }
 
         void string(StringField field) {
-            addInputRow(layout, field, contentX(), cursorY, contentWidth());
-            advanceRow();
+            advanceTo(addInputRow(layout, field, contentX(), cursorY, contentWidth()));
         }
 
         void dropdown(DropdownField field) {
@@ -2806,8 +2926,7 @@ public class HunterWildcardConfigScreen extends Screen {
         }
 
         void dropdown(DropdownField field, boolean editable) {
-            addDropdownRow(layout, field, contentX(), cursorY, contentWidth(), editable);
-            advanceRow();
+            advanceTo(addDropdownRow(layout, field, contentX(), cursorY, contentWidth(), editable));
         }
 
         void booleanField(BooleanField field) {
@@ -2895,6 +3014,12 @@ public class HunterWildcardConfigScreen extends Screen {
             bottomY = Math.max(bottomY, rowContentBottom(cursorY));
             cursorY = nextRowY(cursorY);
         }
+
+        /** For rows that report their own next-row y (they may be taller than a single ROW_HEIGHT). */
+        private void advanceTo(int nextY) {
+            bottomY = Math.max(bottomY, rowContentBottom(nextY - ROW_HEIGHT - ROW_GAP));
+            cursorY = nextY;
+        }
     }
 
     @FunctionalInterface
@@ -2941,8 +3066,13 @@ public class HunterWildcardConfigScreen extends Screen {
         PEARL_FRENZY_INTERVAL_SECONDS(key("config.number.pearl_frenzy_interval_seconds"), key("unit.seconds"), 1),
         WIND_CHARGE_BRAWL_INTERVAL_SECONDS(key("config.number.wind_charge_brawl_interval_seconds"), key("unit.seconds"), 1),
         WIND_CHARGE_EXPLOSION_MULTIPLIER_PERCENT(key("config.number.wind_charge_explosion_multiplier_percent"), key("unit.percent"), 1),
+        BACKROOMS_DURATION_SECONDS(key("config.number.backrooms_duration_seconds"), key("unit.seconds"), 1),
         HUNTER_PREPARE_BOUNDARY_RADIUS(key("config.number.hunter_prepare_boundary_radius"), key("unit.blocks"), 1),
         HUNTER_PREPARE_BOUNDARY_WARN_DISTANCE(key("config.number.hunter_prepare_boundary_warn_distance"), key("unit.blocks"), 0),
+        PIGLIN_PEARL_CHANCE_PERCENT(key("config.number.piglin_pearl_chance_percent"), key("unit.percent"), 0),
+        HUNTER_DAMAGE_MULTIPLIER_PERCENT(key("config.number.hunter_damage_multiplier_percent"), key("unit.percent"), 1),
+        HUNTER_SPEED_PERCENT(key("config.number.hunter_speed_percent"), key("unit.percent"), 10),
+        RUNNER_SPEED_PERCENT(key("config.number.runner_speed_percent"), key("unit.percent"), 10),
         SURVIVE_TIME_SECONDS(key("config.number.survive_time_seconds"), key("unit.seconds"), 1),
         TARGET_X(key("config.number.target_x"), "", Integer.MIN_VALUE),
         TARGET_Y(key("config.number.target_y"), "", Integer.MIN_VALUE),
@@ -3028,7 +3158,8 @@ public class HunterWildcardConfigScreen extends Screen {
     private enum BooleanField {
         HUNTER_PREPARE_BOUNDARY_ENABLED(key("config.boolean.hunter_prepare_boundary_enabled")),
         RUNNER_DEATH_NO_DROPS(key("config.boolean.runner_death_no_drops")),
-        HUNTER_DEATH_NO_DROPS(key("config.boolean.hunter_death_no_drops"));
+        HUNTER_DEATH_NO_DROPS(key("config.boolean.hunter_death_no_drops")),
+        PIGLIN_PEARL_BOOST_ENABLED(key("config.boolean.piglin_pearl_boost_enabled"));
 
         private final String label;
 
@@ -3053,6 +3184,12 @@ public class HunterWildcardConfigScreen extends Screen {
         PEARL_FRENZY("pearl_frenzy"),
         WIND_CHARGE_BRAWL("wind_charge_brawl"),
         BLOOD_RAGE("blood_rage"),
+        KEY_SCRAMBLE("key_scramble"),
+        TINY_PLAYERS("tiny_players"),
+        FRAGILE("fragile"),
+        WHO_ARE_YOU("who_are_you"),
+        STAY_AWAY("stay_away"),
+        BACKROOMS("backrooms"),
         DISABLED_WILDCARD("disabled_wildcard");
 
         private final String id;

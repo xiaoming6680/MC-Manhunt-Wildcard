@@ -1,5 +1,7 @@
 package com.xiaoming.hunterwildcard.game;
 
+import com.xiaoming.hunterwildcard.backrooms.BackroomsDimension;
+import com.xiaoming.hunterwildcard.backrooms.BackroomsSession;
 import com.xiaoming.hunterwildcard.compass.CompassTracker;
 import com.xiaoming.hunterwildcard.config.ModConfig;
 import com.xiaoming.hunterwildcard.network.HunterWildcardPackets;
@@ -10,7 +12,10 @@ import com.xiaoming.hunterwildcard.team.TeamManager;
 import com.xiaoming.hunterwildcard.ui.BossBarManager;
 import com.xiaoming.hunterwildcard.ui.MessageManager;
 import com.xiaoming.hunterwildcard.util.HunterWildcardText;
+import com.xiaoming.hunterwildcard.util.PlayerUtil;
 import com.xiaoming.hunterwildcard.wildcard.WildcardManager;
+import com.xiaoming.hunterwildcard.wildcard.rules.FragileRule;
+import com.xiaoming.hunterwildcard.wildcard.rules.TinyPlayersRule;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -54,6 +59,7 @@ import java.util.UUID;
 
 public class GameManager {
     private static final GameManager INSTANCE = new GameManager();
+    private static final int STATUS_SYNC_INTERVAL_TICKS = 20;
 
     private final ModConfig config = ModConfig.load();
     private final TeamManager teamManager = new TeamManager();
@@ -63,6 +69,7 @@ public class GameManager {
     private final RespawnManager respawnManager = new RespawnManager();
     private final HunterBoundaryManager hunterBoundaryManager = new HunterBoundaryManager();
     private final WinConditionManager winConditionManager = new WinConditionManager();
+    private final RoleModifierManager roleModifierManager = new RoleModifierManager();
     private final WildcardManager wildcardManager = new WildcardManager(bossBarManager, messageManager);
     private final Random random = new Random();
     private final Set<UUID> debugMenuPlayers = new HashSet<>();
@@ -73,6 +80,7 @@ public class GameManager {
     private int preparingTicks;
     private int endingTicks;
     private int actionBarTicks;
+    private int statusSyncTicks;
     private boolean eventsRegistered;
     private UUID wildcardTestPlayerUuid;
     private Boolean previousLocatorBarRule;
@@ -92,6 +100,7 @@ public class GameManager {
 
         ServerTickEvents.END_SERVER_TICK.register(this::tick);
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> handleDisconnect(handler.player));
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, joinedServer) -> HunterWildcardPackets.sendSync(handler.player));
         ServerLivingEntityEvents.AFTER_DEATH.register((entity, damageSource) -> {
             if (entity instanceof ServerPlayerEntity player) {
                 handlePlayerDeath(player, damageSource);
@@ -101,6 +110,11 @@ public class GameManager {
 
             if (entity instanceof EnderDragonEntity) {
                 handleDragonDeath();
+            }
+        });
+        ServerLivingEntityEvents.AFTER_DAMAGE.register((entity, damageSource, baseDamageTaken, damageTaken, blocked) -> {
+            if (entity instanceof ServerPlayerEntity player && damageTaken > 0.0F && !blocked) {
+                handlePlayerDamaged(player, damageSource, damageTaken);
             }
         });
         AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
@@ -243,6 +257,11 @@ public class GameManager {
         return messageManager;
     }
 
+    /** True for team members and for the operator currently running a wildcard test in the lobby. */
+    public boolean isWildcardParticipant(ServerPlayerEntity player) {
+        return teamManager.getRole(player) != null || player.getUuid().equals(wildcardTestPlayerUuid);
+    }
+
     public void setDebugMenuEnabled(ServerPlayerEntity player, boolean enabled) {
         if (enabled) {
             debugMenuPlayers.add(player.getUuid());
@@ -336,6 +355,18 @@ public class GameManager {
         }
     }
 
+    /** Lets a running rule end itself early (used by the Backrooms once a whole side is out). */
+    public void requestWildcardStop() {
+        if (server == null) {
+            return;
+        }
+        GameContext stopContext = state == GameState.RUNNING ? context() : debugContext(server);
+        if (wildcardManager.stopActiveRule(stopContext)) {
+            wildcardTestPlayerUuid = state == GameState.RUNNING ? wildcardTestPlayerUuid : null;
+            HunterWildcardPackets.syncAll(server);
+        }
+    }
+
     public void debugStopWildcard(ServerCommandSource source) {
         GameContext testContext = state == GameState.RUNNING && server != null ? context() : debugContext(source.getServer());
         boolean stopped = wildcardManager.stopActiveRule(testContext);
@@ -351,6 +382,11 @@ public class GameManager {
         if (state == GameState.WAITING && wildcardManager.hasRuleInProgress()) {
             server = tickServer;
             wildcardManager.tick(debugContext(tickServer));
+            statusSyncTicks++;
+            if (statusSyncTicks >= STATUS_SYNC_INTERVAL_TICKS) {
+                statusSyncTicks = 0;
+                HunterWildcardPackets.syncAll(tickServer);
+            }
             return;
         }
 
@@ -359,6 +395,12 @@ public class GameManager {
         }
 
         server = tickServer;
+        statusSyncTicks++;
+        if (statusSyncTicks >= STATUS_SYNC_INTERVAL_TICKS) {
+            statusSyncTicks = 0;
+            HunterWildcardPackets.syncAll(tickServer);
+        }
+
         if (state == GameState.PREPARING) {
             tickPreparing();
             return;
@@ -395,6 +437,7 @@ public class GameManager {
         winConditionManager.start(context);
         wildcardManager.reset();
         compassTracker.giveCompasses(context);
+        roleModifierManager.apply(context);
         messageManager.broadcast(server, HunterWildcardText.translatable("msg.game.running_started"));
     }
 
@@ -403,6 +446,7 @@ public class GameManager {
         compassTracker.tick(context, wildcardManager.getActiveRule());
         compassTracker.removeRunnerCompasses(context);
         respawnManager.tick(context, compassTracker);
+        roleModifierManager.tick(context);
         wildcardManager.tick(context);
         checkWinConditions();
         if (state != GameState.RUNNING) {
@@ -456,7 +500,7 @@ public class GameManager {
             HunterWildcardPackets.sendHudFeedback(
                     context,
                     HunterWildcardText.spec("hud.feedback.counter_kill.title"),
-                    runnerKiller.getName().getString() + " -> " + player.getName().getString(),
+                    HunterWildcardText.spec("hud.feedback.versus", PlayerUtil.displayNameSpec(runnerKiller), PlayerUtil.displayNameSpec(player)),
                     HunterWildcardText.spec("hud.feedback.counter_kill.subtitle"),
                     "runner"
             );
@@ -494,6 +538,30 @@ public class GameManager {
         }
     }
 
+    public void handlePlayerDamaged(ServerPlayerEntity player, DamageSource source, float damageTaken) {
+        GameContext eventContext = wildcardEventContext(player);
+        if (eventContext != null) {
+            wildcardManager.onPlayerDamaged(eventContext, player, source, damageTaken);
+        }
+    }
+
+    /** Scales damage dealt by a hunter to a runner by the configured multiplier while a round is running. */
+    public float modifyIncomingDamage(ServerPlayerEntity victim, DamageSource source, float amount) {
+        if (state != GameState.RUNNING || amount <= 0.0F) {
+            return amount;
+        }
+
+        if (!(source.getAttacker() instanceof ServerPlayerEntity attacker)) {
+            return amount;
+        }
+
+        if (teamManager.isHunter(attacker) && teamManager.isRunner(victim)) {
+            return amount * config.getHunterDamageMultiplier();
+        }
+
+        return amount;
+    }
+
     public void handleItemUse(ServerPlayerEntity player, Hand hand, ItemStack stack) {
         GameContext eventContext = wildcardEventContext(player);
         if (eventContext != null) {
@@ -516,6 +584,12 @@ public class GameManager {
     }
 
     public boolean handleDeathInventoryDrop(ServerPlayerEntity player) {
+        // Dying inside the Backrooms never scatters a kit somewhere nobody can go back for.
+        if (BackroomsDimension.isInBackrooms(player)) {
+            preserveDeathInventory(player);
+            return true;
+        }
+
         if (state != GameState.RUNNING) {
             return false;
         }
@@ -594,6 +668,7 @@ public class GameManager {
 
     private void handleServerStopping(MinecraftServer stoppingServer) {
         cleanupAndReset(stoppingServer);
+        BackroomsSession.returnEveryone(stoppingServer);
     }
 
     private void checkWinConditions() {
@@ -831,6 +906,7 @@ public class GameManager {
         winConditionManager.clear(context);
         respawnManager.clear(context);
         compassTracker.clear(context);
+        roleModifierManager.clear(context);
 
         for (ServerPlayerEntity player : context.getParticipants()) {
             player.removeStatusEffect(StatusEffects.SPEED);
@@ -838,6 +914,8 @@ public class GameManager {
             player.removeStatusEffect(StatusEffects.SLOW_FALLING);
             player.removeStatusEffect(StatusEffects.GLOWING);
             player.removeStatusEffect(StatusEffects.NIGHT_VISION);
+            TinyPlayersRule.removeScale(player);
+            FragileRule.removeCap(player);
         }
     }
 

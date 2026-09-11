@@ -25,6 +25,17 @@ dependencies {
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 }
 
+fabricApi {
+    configureTests {
+        createSourceSet = true
+        modId = "hunterwildcard-test"
+        enableGameTests = false
+        enableClientGameTests = true
+        eula = true
+        clearRunDirectory = true
+    }
+}
+
 processResources {
     inputs.property "version", project.version
 

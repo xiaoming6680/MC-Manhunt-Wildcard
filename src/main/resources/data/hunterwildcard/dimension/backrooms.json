@@ -1,0 +1,10 @@
+{
+  "type": "hunterwildcard:backrooms",
+  "generator": {
+    "type": "hunterwildcard:backrooms",
+    "biome_source": {
+      "type": "minecraft:fixed",
+      "biome": "hunterwildcard:backrooms"
+    }
+  }
+}

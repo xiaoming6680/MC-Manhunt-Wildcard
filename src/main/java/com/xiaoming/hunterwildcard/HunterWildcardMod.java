@@ -1,5 +1,8 @@
 package com.xiaoming.hunterwildcard;
 
+import com.xiaoming.hunterwildcard.backrooms.BackroomsBlocks;
+import com.xiaoming.hunterwildcard.backrooms.BackroomsDimension;
+import com.xiaoming.hunterwildcard.backrooms.BackroomsSession;
 import com.xiaoming.hunterwildcard.command.HunterWildcardCommand;
 import com.xiaoming.hunterwildcard.game.GameManager;
 import com.xiaoming.hunterwildcard.network.HunterWildcardPackets;
@@ -15,6 +18,9 @@ public class HunterWildcardMod implements ModInitializer {
 
     @Override
     public void onInitialize() {
+        BackroomsBlocks.register();
+        BackroomsDimension.register();
+        BackroomsSession.initialize();
         HunterWildcardPackets.registerPayloadTypes();
         HunterWildcardPackets.registerServerReceivers();
         ServerTickEvents.END_SERVER_TICK.register(SupplyDropRule::tickTrackedDrops);

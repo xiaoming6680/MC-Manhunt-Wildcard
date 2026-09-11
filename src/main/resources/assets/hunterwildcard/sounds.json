@@ -1,0 +1,10 @@
+{
+  "backrooms_ambience": {
+    "sounds": [
+      {
+        "name": "hunterwildcard:backrooms/ambience",
+        "stream": true
+      }
+    ]
+  }
+}

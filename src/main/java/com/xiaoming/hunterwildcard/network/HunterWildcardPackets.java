@@ -43,6 +43,10 @@ public class HunterWildcardPackets {
             new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "objective_notice"));
     public static final CustomPayload.Id<WeaponOverheatStatusPayload> S2C_WEAPON_OVERHEAT_STATUS =
             new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "weapon_overheat_status"));
+    public static final CustomPayload.Id<KeyScramblePayload> S2C_KEY_SCRAMBLE =
+            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "key_scramble"));
+    public static final CustomPayload.Id<BackroomsPhasePayload> S2C_BACKROOMS_PHASE =
+            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "backrooms_phase"));
     public static final CustomPayload.Id<UpdateConfigPayload> C2S_UPDATE_CONFIG =
             new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "update_config"));
     public static final CustomPayload.Id<ReloadConfigPayload> C2S_RELOAD_CONFIG =
@@ -80,6 +84,8 @@ public class HunterWildcardPackets {
         PayloadTypeRegistry.playS2C().register(S2C_OBJECTIVE_STATUS, ObjectiveStatusPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(S2C_OBJECTIVE_NOTICE, ObjectiveNoticePayload.CODEC);
         PayloadTypeRegistry.playS2C().register(S2C_WEAPON_OVERHEAT_STATUS, WeaponOverheatStatusPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(S2C_KEY_SCRAMBLE, KeyScramblePayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(S2C_BACKROOMS_PHASE, BackroomsPhasePayload.CODEC);
         PayloadTypeRegistry.playC2S().register(C2S_UPDATE_CONFIG, UpdateConfigPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(C2S_RELOAD_CONFIG, ReloadConfigPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(C2S_DEBUG_ACTION, DebugActionPayload.CODEC);
@@ -252,6 +258,18 @@ public class HunterWildcardPackets {
     public static void clearWeaponOverheatStatus(ServerPlayerEntity player) {
         if (ServerPlayNetworking.canSend(player, S2C_WEAPON_OVERHEAT_STATUS)) {
             ServerPlayNetworking.send(player, new WeaponOverheatStatusPayload(0, 1, false));
+        }
+    }
+
+    public static void sendBackroomsPhase(ServerPlayerEntity player, BackroomsPhase phase, int holdTicks) {
+        if (ServerPlayNetworking.canSend(player, S2C_BACKROOMS_PHASE)) {
+            ServerPlayNetworking.send(player, new BackroomsPhasePayload(phase, holdTicks));
+        }
+    }
+
+    public static void sendKeyScramble(ServerPlayerEntity player, KeyScrambleAction action) {
+        if (ServerPlayNetworking.canSend(player, S2C_KEY_SCRAMBLE)) {
+            ServerPlayNetworking.send(player, new KeyScramblePayload(action));
         }
     }
 
@@ -503,6 +521,19 @@ public class HunterWildcardPackets {
         ROLL_WILDCARD
     }
 
+    public enum KeyScrambleAction {
+        RESTORE,
+        ENABLE,
+        SHUFFLE
+    }
+
+    public enum BackroomsPhase {
+        FALL,
+        ENTER,
+        EXIT,
+        CLEAR
+    }
+
     public record ConfigSnapshot(
             int preparingSeconds,
             int endingSeconds,
@@ -518,11 +549,17 @@ public class HunterWildcardPackets {
             int pearlFrenzyIntervalSeconds,
             int windChargeBrawlIntervalSeconds,
             int windChargeExplosionMultiplierPercent,
+            int backroomsDurationSeconds,
             boolean hunterPrepareBoundaryEnabled,
             int hunterPrepareBoundaryRadius,
             int hunterPrepareBoundaryWarnDistance,
             boolean runnerDeathNoDrops,
             boolean hunterDeathNoDrops,
+            boolean piglinPearlBoostEnabled,
+            int piglinPearlChancePercent,
+            int hunterDamageMultiplierPercent,
+            int hunterSpeedPercent,
+            int runnerSpeedPercent,
             String runnerVictoryType,
             String runnerWinMode,
             boolean enableDragonWin,
@@ -561,6 +598,12 @@ public class HunterWildcardPackets {
             boolean enablePearlFrenzy,
             boolean enableWindChargeBrawl,
             boolean enableBloodRage,
+            boolean enableKeyScramble,
+            boolean enableTinyPlayers,
+            boolean enableFragile,
+            boolean enableWhoAreYou,
+            boolean enableStayAway,
+            boolean enableBackrooms,
             boolean enableDisabledWildcard
     ) {
         private static ConfigSnapshot fromBuf(RegistryByteBuf buf) {
@@ -579,11 +622,17 @@ public class HunterWildcardPackets {
                     buf.readInt(),
                     buf.readInt(),
                     buf.readInt(),
+                    buf.readInt(),
                     buf.readBoolean(),
                     buf.readInt(),
                     buf.readInt(),
                     buf.readBoolean(),
                     buf.readBoolean(),
+                    buf.readBoolean(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
                     buf.readString(32),
                     buf.readString(32),
                     buf.readBoolean(),
@@ -607,6 +656,12 @@ public class HunterWildcardPackets {
                     buf.readString(32),
                     buf.readBoolean(),
                     buf.readInt(),
+                    buf.readBoolean(),
+                    buf.readBoolean(),
+                    buf.readBoolean(),
+                    buf.readBoolean(),
+                    buf.readBoolean(),
+                    buf.readBoolean(),
                     buf.readBoolean(),
                     buf.readBoolean(),
                     buf.readBoolean(),
@@ -641,11 +696,17 @@ public class HunterWildcardPackets {
             buf.writeInt(pearlFrenzyIntervalSeconds);
             buf.writeInt(windChargeBrawlIntervalSeconds);
             buf.writeInt(windChargeExplosionMultiplierPercent);
+            buf.writeInt(backroomsDurationSeconds);
             buf.writeBoolean(hunterPrepareBoundaryEnabled);
             buf.writeInt(hunterPrepareBoundaryRadius);
             buf.writeInt(hunterPrepareBoundaryWarnDistance);
             buf.writeBoolean(runnerDeathNoDrops);
             buf.writeBoolean(hunterDeathNoDrops);
+            buf.writeBoolean(piglinPearlBoostEnabled);
+            buf.writeInt(piglinPearlChancePercent);
+            buf.writeInt(hunterDamageMultiplierPercent);
+            buf.writeInt(hunterSpeedPercent);
+            buf.writeInt(runnerSpeedPercent);
             buf.writeString(runnerVictoryType);
             buf.writeString(runnerWinMode);
             buf.writeBoolean(enableDragonWin);
@@ -684,6 +745,12 @@ public class HunterWildcardPackets {
             buf.writeBoolean(enablePearlFrenzy);
             buf.writeBoolean(enableWindChargeBrawl);
             buf.writeBoolean(enableBloodRage);
+            buf.writeBoolean(enableKeyScramble);
+            buf.writeBoolean(enableTinyPlayers);
+            buf.writeBoolean(enableFragile);
+            buf.writeBoolean(enableWhoAreYou);
+            buf.writeBoolean(enableStayAway);
+            buf.writeBoolean(enableBackrooms);
             buf.writeBoolean(enableDisabledWildcard);
         }
 
@@ -703,11 +770,17 @@ public class HunterWildcardPackets {
                     config.pearlFrenzyIntervalSeconds,
                     config.windChargeBrawlIntervalSeconds,
                     config.windChargeExplosionMultiplierPercent,
+                    config.backroomsDurationSeconds,
                     config.hunterPrepareBoundaryEnabled,
                     config.hunterPrepareBoundaryRadius,
                     config.hunterPrepareBoundaryWarnDistance,
                     config.runnerDeathNoDrops,
                     config.hunterDeathNoDrops,
+                    config.piglinPearlBoostEnabled,
+                    config.piglinPearlChancePercent,
+                    config.hunterDamageMultiplierPercent,
+                    config.hunterSpeedPercent,
+                    config.runnerSpeedPercent,
                     config.runnerVictoryType,
                     config.runnerWinMode,
                     config.enableDragonWin,
@@ -746,6 +819,12 @@ public class HunterWildcardPackets {
                     config.enablePearlFrenzy,
                     config.enableWindChargeBrawl,
                     config.enableBloodRage,
+                    config.enableKeyScramble,
+                    config.enableTinyPlayers,
+                    config.enableFragile,
+                    config.enableWhoAreYou,
+                    config.enableStayAway,
+                    config.enableBackrooms,
                     config.enableDisabledWildcard
             );
         }
@@ -766,11 +845,17 @@ public class HunterWildcardPackets {
             config.pearlFrenzyIntervalSeconds = pearlFrenzyIntervalSeconds;
             config.windChargeBrawlIntervalSeconds = windChargeBrawlIntervalSeconds;
             config.windChargeExplosionMultiplierPercent = windChargeExplosionMultiplierPercent;
+            config.backroomsDurationSeconds = backroomsDurationSeconds;
             config.hunterPrepareBoundaryEnabled = hunterPrepareBoundaryEnabled;
             config.hunterPrepareBoundaryRadius = hunterPrepareBoundaryRadius;
             config.hunterPrepareBoundaryWarnDistance = hunterPrepareBoundaryWarnDistance;
             config.runnerDeathNoDrops = runnerDeathNoDrops;
             config.hunterDeathNoDrops = hunterDeathNoDrops;
+            config.piglinPearlBoostEnabled = piglinPearlBoostEnabled;
+            config.piglinPearlChancePercent = piglinPearlChancePercent;
+            config.hunterDamageMultiplierPercent = hunterDamageMultiplierPercent;
+            config.hunterSpeedPercent = hunterSpeedPercent;
+            config.runnerSpeedPercent = runnerSpeedPercent;
             config.runnerVictoryType = runnerVictoryType;
             config.runnerWinMode = runnerWinMode;
             config.enableDragonWin = enableDragonWin;
@@ -809,6 +894,12 @@ public class HunterWildcardPackets {
             config.enablePearlFrenzy = enablePearlFrenzy;
             config.enableWindChargeBrawl = enableWindChargeBrawl;
             config.enableBloodRage = enableBloodRage;
+            config.enableKeyScramble = enableKeyScramble;
+            config.enableTinyPlayers = enableTinyPlayers;
+            config.enableFragile = enableFragile;
+            config.enableWhoAreYou = enableWhoAreYou;
+            config.enableStayAway = enableStayAway;
+            config.enableBackrooms = enableBackrooms;
             config.enableDisabledWildcard = enableDisabledWildcard;
             config.validate();
             return config;
@@ -1102,6 +1193,43 @@ public class HunterWildcardPackets {
         @Override
         public Id<? extends CustomPayload> getId() {
             return S2C_WEAPON_OVERHEAT_STATUS;
+        }
+    }
+
+    public record BackroomsPhasePayload(BackroomsPhase phase, int holdTicks) implements CustomPayload {
+        public static final PacketCodec<RegistryByteBuf, BackroomsPhasePayload> CODEC =
+                PacketCodec.of(BackroomsPhasePayload::write, BackroomsPhasePayload::read);
+
+        private void write(RegistryByteBuf buf) {
+            buf.writeEnumConstant(phase);
+            buf.writeInt(holdTicks);
+        }
+
+        private static BackroomsPhasePayload read(RegistryByteBuf buf) {
+            return new BackroomsPhasePayload(buf.readEnumConstant(BackroomsPhase.class), buf.readInt());
+        }
+
+        @Override
+        public Id<? extends CustomPayload> getId() {
+            return S2C_BACKROOMS_PHASE;
+        }
+    }
+
+    public record KeyScramblePayload(KeyScrambleAction action) implements CustomPayload {
+        public static final PacketCodec<RegistryByteBuf, KeyScramblePayload> CODEC =
+                PacketCodec.of(KeyScramblePayload::write, KeyScramblePayload::read);
+
+        private void write(RegistryByteBuf buf) {
+            buf.writeEnumConstant(action);
+        }
+
+        private static KeyScramblePayload read(RegistryByteBuf buf) {
+            return new KeyScramblePayload(buf.readEnumConstant(KeyScrambleAction.class));
+        }
+
+        @Override
+        public Id<? extends CustomPayload> getId() {
+            return S2C_KEY_SCRAMBLE;
         }
     }
 

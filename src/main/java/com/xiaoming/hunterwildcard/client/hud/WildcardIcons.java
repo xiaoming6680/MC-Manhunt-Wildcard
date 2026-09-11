@@ -28,6 +28,12 @@ public class WildcardIcons {
             case "pearl_frenzy", "PearlFrenzy" -> new ItemStack(Items.ENDER_PEARL);
             case "wind_charge_brawl", "WindChargeBrawl" -> new ItemStack(Items.WIND_CHARGE);
             case "blood_rage", "BloodRage" -> new ItemStack(Items.REDSTONE);
+            case "key_scramble", "KeyScramble" -> new ItemStack(Items.TRIPWIRE_HOOK);
+            case "tiny_players", "TinyPlayers" -> new ItemStack(Items.RABBIT_FOOT);
+            case "fragile", "Fragile" -> new ItemStack(Items.GLASS);
+            case "who_are_you", "WhoAreYou" -> new ItemStack(Items.PLAYER_HEAD);
+            case "stay_away", "StayAway" -> new ItemStack(Items.GOLDEN_SWORD);
+            case "backrooms", "Backrooms" -> new ItemStack(Items.YELLOW_WOOL);
             case "disabled_wildcard", "DisabledWildcard", "NoEffect" -> new ItemStack(Items.BARRIER);
             default -> new ItemStack(Items.NETHER_STAR);
         };

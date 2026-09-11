@@ -2,12 +2,14 @@ package com.xiaoming.hunterwildcard.client.hud;
 
 import com.xiaoming.hunterwildcard.HunterWildcardMod;
 import com.xiaoming.hunterwildcard.client.HunterWildcardClientText;
+import com.xiaoming.hunterwildcard.client.key.KeyScrambleController;
 import com.xiaoming.hunterwildcard.util.HunterWildcardText;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.render.RenderTickCounter;
 import net.minecraft.client.sound.PositionedSoundInstance;
 import net.minecraft.item.ItemStack;
@@ -52,13 +54,24 @@ public class WildcardDrawOverlay {
             "pearl_frenzy",
             "wind_charge_brawl",
             "blood_rage",
+            "key_scramble",
+            "tiny_players",
+            "fragile",
+            "who_are_you",
+            "stay_away",
+            "backrooms",
             "disabled_wildcard"
     };
+    private static final int KEY_PANEL_WIDTH = 146;
+    private static final int KEY_PANEL_ROW_HEIGHT = 11;
+    private static final int KEY_PANEL_MARGIN = 6;
+    private static final int KEY_PANEL_TOP = 34; // below the boss bar rows so the countdown text stays readable
 
     private static long drawStartTimeMs = -1L;
     private static String finalWildcard = "";
     private static boolean revealSoundPlayed;
     private static boolean introVisible;
+    private static int introPanelBottom;
     private static boolean introHiding;
     private static long introTransitionStartTimeMs = -1L;
     private static String introName = "";
@@ -94,8 +107,8 @@ public class WildcardDrawOverlay {
     }
 
     public static void showKillFeedback(String hunterName, String runnerName, int remainingKills, int currentKills, int targetKills) {
-        String hunter = hunterName == null || hunterName.isBlank() ? tr(HunterWildcardText.key("role.hunter")) : hunterName;
-        String runner = runnerName == null || runnerName.isBlank() ? tr(HunterWildcardText.key("role.runner")) : runnerName;
+        String hunter = hunterName == null || hunterName.isBlank() ? tr(HunterWildcardText.key("role.hunter")) : tr(hunterName);
+        String runner = runnerName == null || runnerName.isBlank() ? tr(HunterWildcardText.key("role.runner")) : tr(runnerName);
         int remaining = Math.max(0, remainingKills);
         int current = Math.max(0, currentKills);
         int target = Math.max(1, targetKills);
@@ -175,12 +188,70 @@ public class WildcardDrawOverlay {
     }
 
     private static void render(DrawContext context, RenderTickCounter tickCounter) {
+        introPanelBottom = 0;
         renderDrawPanel(context);
         renderIntroPanel(context);
+        if (GameStatusHud.shouldRender()) {
+            GameStatusHud.render(context, introPanelBottom > 0 ? introPanelBottom + 4 : 6);
+        }
         renderObjectiveStatusPanel(context);
         renderWeaponOverheatBar(context);
         renderObjectiveNoticePanels(context);
+        renderKeyScramblePanel(context);
         renderFeedbackPanels(context);
+    }
+
+    private static int keyScramblePanelHeight() {
+        int rows = KeyScrambleController.size();
+        return rows == 0 ? 0 : 16 + rows * KEY_PANEL_ROW_HEIGHT + 3;
+    }
+
+    /** Vertical space the key panel occupies at the top-right, so other top-right panels can move below it. */
+    private static int keyScrambleReservedHeight() {
+        if (!KeyScrambleController.isActive()) {
+            return 0;
+        }
+        return KEY_PANEL_TOP - 10 + keyScramblePanelHeight() + 4;
+    }
+
+    private static void renderKeyScramblePanel(DrawContext context) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (!KeyScrambleController.isActive() || client.options.hudHidden) {
+            return;
+        }
+
+        TextRenderer textRenderer = client.textRenderer;
+        int screenWidth = client.getWindow().getScaledWidth();
+        int rows = KeyScrambleController.size();
+        int panelWidth = Math.min(KEY_PANEL_WIDTH, Math.max(80, screenWidth - 12));
+        int panelHeight = keyScramblePanelHeight();
+        int panelX = screenWidth - panelWidth - KEY_PANEL_MARGIN;
+        int panelY = KEY_PANEL_TOP;
+        int accent = 0xFFFFB84D;
+        long now = System.currentTimeMillis();
+
+        context.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, 0xD8161B22);
+        context.fill(panelX + panelWidth - 2, panelY, panelX + panelWidth, panelY + panelHeight, accent);
+        context.fill(panelX, panelY, panelX + panelWidth, panelY + 1, accent);
+
+        String title = tr(HunterWildcardText.key("hud.key_scramble.title"));
+        context.drawText(textRenderer, Text.literal(trim(textRenderer, title, panelWidth - 10)), panelX + 5, panelY + 4, accent, false);
+
+        int labelWidth = panelWidth - 10;
+        for (int i = 0; i < rows; i++) {
+            KeyBinding binding = KeyScrambleController.binding(i);
+            String action = Text.translatable(binding.getId()).getString();
+            String key = binding.getBoundKeyLocalizedText().getString();
+            boolean flash = KeyScrambleController.isRecentlyChanged(i, now);
+            int rowY = panelY + 16 + i * KEY_PANEL_ROW_HEIGHT;
+            int keyWidth = textRenderer.getWidth(key);
+            int keyX = panelX + panelWidth - 6 - keyWidth;
+            if (flash) {
+                context.fill(panelX + 3, rowY - 1, panelX + panelWidth - 3, rowY + 9, 0x66FFB84D);
+            }
+            context.drawText(textRenderer, Text.literal(trim(textRenderer, action, labelWidth - keyWidth - 6)), panelX + 5, rowY, 0xFFC9D4DE, false);
+            context.drawText(textRenderer, Text.literal(key), keyX, rowY, flash ? 0xFFFFFFFF : 0xFFFFD966, true);
+        }
     }
 
     private static void renderWeaponOverheatBar(DrawContext context) {
@@ -250,6 +321,7 @@ public class WildcardDrawOverlay {
         int panelX = -Math.round((panelWidth + 2) * (1.0F - progress));
         int panelY = 22;
 
+        introPanelBottom = panelY + panelHeight;
         context.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, withAlpha(0xD8161B22, alpha));
         context.fill(panelX, panelY, panelX + 2, panelY + panelHeight, withAlpha(0xFF7FC2FF, alpha));
         context.fill(panelX, panelY + panelHeight - 1, panelX + panelWidth, panelY + panelHeight, withAlpha(0xAA7FC2FF, alpha));
@@ -487,7 +559,7 @@ public class WildcardDrawOverlay {
         int panelWidth = Math.min(204, Math.max(160, screenWidth - 24));
         int panelHeight = 50;
         int targetX = screenWidth - panelWidth;
-        int targetY = 10 + index * (panelHeight + 5);
+        int targetY = 10 + keyScrambleReservedHeight() + index * (panelHeight + 5);
         if (Float.isNaN(entry.currentY)) {
             entry.currentY = targetY;
         } else {

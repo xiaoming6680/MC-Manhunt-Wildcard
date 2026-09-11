@@ -29,7 +29,7 @@ public class HunterRadarRule implements WildcardRule {
             }
 
             int distance = PlayerUtil.roundDistance(Math.sqrt(hunter.squaredDistanceTo(runner)));
-            hunter.sendMessage(HunterWildcardText.translatable("msg.wildcard.hunter_radar.nearest", runner.getName().getString(), distance).formatted(Formatting.AQUA));
+            hunter.sendMessage(HunterWildcardText.translatable("msg.wildcard.hunter_radar.nearest", PlayerUtil.displayNameText(runner), distance).formatted(Formatting.AQUA));
             if (alertedRunners.add(runner.getUuid())) {
                 runner.sendMessage(HunterWildcardText.translatable("msg.wildcard.hunter_radar.warning").formatted(Formatting.YELLOW), true);
             }

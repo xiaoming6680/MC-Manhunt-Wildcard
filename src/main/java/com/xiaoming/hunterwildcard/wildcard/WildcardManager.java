@@ -9,6 +9,7 @@ import com.xiaoming.hunterwildcard.util.HunterWildcardText;
 import net.minecraft.block.BlockState;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.item.ItemStack;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -30,6 +31,7 @@ public class WildcardManager {
     private WildcardRule pendingRule;
     private Class<?> lastDrawnRuleClass;
     private int activeRuleRemainingTicks;
+    private int activeRuleDurationTicks;
     private int pendingRuleDrawTicks;
     private int ticksUntilNextWildcard = -1;
 
@@ -58,7 +60,7 @@ public class WildcardManager {
         if (activeRule != null) {
             activeRuleRemainingTicks--;
             activeRule.onTick(context, activeRuleRemainingTicks);
-            bossBarManager.updateWildcardBar(context, activeRule.getName(), activeRuleRemainingTicks, context.getConfig().getWildcardDurationTicks());
+            bossBarManager.updateWildcardBar(context, activeRule.getName(), activeRuleRemainingTicks, Math.max(1, activeRuleDurationTicks));
 
             if (activeRuleRemainingTicks <= 0) {
                 stopActiveRuleInternal(context, true);
@@ -91,6 +93,12 @@ public class WildcardManager {
     public void onPlayerAttack(GameContext context, ServerPlayerEntity player, Entity target) {
         if (shouldForwardRuleEvent(context, player)) {
             activeRule.onPlayerAttack(context, player, target);
+        }
+    }
+
+    public void onPlayerDamaged(GameContext context, ServerPlayerEntity player, DamageSource source, float damageTaken) {
+        if (shouldForwardRuleEvent(context, player)) {
+            activeRule.onPlayerDamaged(context, player, source, damageTaken);
         }
     }
 
@@ -239,12 +247,14 @@ public class WildcardManager {
         activeRule = pendingRule;
         pendingRule = null;
         pendingRuleDrawTicks = 0;
-        activeRuleRemainingTicks = context.getConfig().getWildcardDurationTicks();
+        activeRuleDurationTicks = Math.max(20, activeRule.getDurationTicks(context.getConfig()));
+        activeRuleRemainingTicks = activeRuleDurationTicks;
 
         activeRule.onStart(context);
-        bossBarManager.updateWildcardBar(context, activeRule.getName(), activeRuleRemainingTicks, context.getConfig().getWildcardDurationTicks());
+        bossBarManager.updateWildcardBar(context, activeRule.getName(), activeRuleRemainingTicks, activeRuleDurationTicks);
         HunterWildcardPackets.sendWildcardIntro(context, activeRule.getName(), activeRule.getDescriptionKey());
         messageManager.toParticipants(context, HunterWildcardText.translatable("msg.wildcard.triggered", activeRule.getDisplayName()));
+        HunterWildcardPackets.syncAll(context.getServer());
     }
 
     private void cancelPendingRule(GameContext context, boolean resetInterval) {
@@ -269,6 +279,7 @@ public class WildcardManager {
         ticksUntilNextWildcard = resetInterval ? context.getConfig().getWildcardIntervalTicks() : -1;
         bossBarManager.clearWildcardBar();
         HunterWildcardPackets.clearWildcardIntro(context);
+        HunterWildcardPackets.syncAll(context.getServer());
     }
 
     private List<WildcardRule> getEnabledRules(ModConfig config) {

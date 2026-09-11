@@ -2,9 +2,11 @@ package com.xiaoming.hunterwildcard.client;
 
 import com.xiaoming.hunterwildcard.client.hud.WildcardDrawOverlay;
 import com.xiaoming.hunterwildcard.client.key.HunterWildcardKeyBindings;
+import com.xiaoming.hunterwildcard.client.key.KeyScrambleController;
 import com.xiaoming.hunterwildcard.client.screen.HunterWildcardConfigScreen;
 import com.xiaoming.hunterwildcard.network.HunterWildcardPackets;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 
 public class HunterWildcardClient implements ClientModInitializer {
@@ -13,7 +15,11 @@ public class HunterWildcardClient implements ClientModInitializer {
         HunterWildcardPackets.registerPayloadTypes();
         WildcardDrawOverlay.register();
         ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_SYNC_CONFIG, (payload, context) ->
-                context.client().execute(() -> HunterWildcardConfigScreen.receiveSync(payload)));
+                context.client().execute(() -> {
+                    ClientGameStatus.update(payload);
+                    HunterWildcardConfigScreen.receiveSync(payload);
+                }));
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> ClientGameStatus.clear());
         ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_OPERATION_RESULT, (payload, context) ->
                 context.client().execute(() -> HunterWildcardConfigScreen.receiveOperationResult(payload)));
         ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_CLOSE_CONFIG_SCREEN, (payload, context) ->
@@ -60,6 +66,18 @@ public class HunterWildcardClient implements ClientModInitializer {
                         payload.maxHeat(),
                         payload.visible()
                 )));
+        ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_KEY_SCRAMBLE, (payload, context) ->
+                context.client().execute(() -> {
+                    switch (payload.action()) {
+                        case ENABLE -> KeyScrambleController.enable();
+                        case SHUFFLE -> KeyScrambleController.shuffle();
+                        case RESTORE -> KeyScrambleController.restore();
+                    }
+                }));
+        ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_BACKROOMS_PHASE, (payload, context) ->
+                context.client().execute(() -> BackroomsClient.onPhase(payload.phase(), payload.holdTicks())));
         HunterWildcardKeyBindings.register();
+        KeyScrambleController.register();
+        BackroomsClient.register();
     }
 }

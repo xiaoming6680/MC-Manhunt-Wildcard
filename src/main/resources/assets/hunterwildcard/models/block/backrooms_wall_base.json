@@ -1,0 +1,7 @@
+{
+  "parent": "minecraft:block/cube_column",
+  "textures": {
+    "end": "hunterwildcard:block/backrooms_wall",
+    "side": "hunterwildcard:block/backrooms_wall_base"
+  }
+}
