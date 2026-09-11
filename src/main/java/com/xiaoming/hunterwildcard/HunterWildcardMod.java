@@ -6,6 +6,7 @@ import com.xiaoming.hunterwildcard.backrooms.BackroomsSession;
 import com.xiaoming.hunterwildcard.command.HunterWildcardCommand;
 import com.xiaoming.hunterwildcard.game.GameManager;
 import com.xiaoming.hunterwildcard.network.HunterWildcardPackets;
+import com.xiaoming.hunterwildcard.sound.HunterWildcardSounds;
 import com.xiaoming.hunterwildcard.wildcard.rules.SupplyDropRule;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -18,6 +19,7 @@ public class HunterWildcardMod implements ModInitializer {
 
     @Override
     public void onInitialize() {
+        HunterWildcardSounds.register();
         BackroomsBlocks.register();
         BackroomsDimension.register();
         BackroomsSession.initialize();

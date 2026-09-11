@@ -2,6 +2,10 @@
 
 English | [Simplified Chinese](CHANGELOG.md)
 
+## 1.3.1
+
+- Fixed the Backrooms ambience never playing: the loop fades in from volume 0 and the sound engine skips silent sounds, so it is now flagged always-play; the sound event is registered during main init, the loop starts one second after entering and restarts itself if the dimension switch killed it, and the volume goes from 0.08 to 0.2. The client test now asserts the ambience is playing.
+
 ## 1.3.0
 
 ### New Wildcards

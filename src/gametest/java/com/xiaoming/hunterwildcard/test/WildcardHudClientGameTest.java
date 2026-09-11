@@ -188,6 +188,7 @@ public final class WildcardHudClientGameTest implements FabricClientGameTest {
             world.getServer().runOnServer(server -> check(com.xiaoming.hunterwildcard.backrooms.BackroomsDimension.isInBackrooms(player(server)), "Player is inside the Backrooms"));
             c.runOnClient(client -> check(client.options.getViewDistance().getValue() == 6, "View distance locked to 6 chunks"));
             c.runOnClient(client -> check(!com.xiaoming.hunterwildcard.client.BackroomsClient.isCovered(), "Blackout lifted after arrival"));
+            c.runOnClient(client -> check(com.xiaoming.hunterwildcard.client.BackroomsClient.isAmbiencePlaying(), "Backrooms ambience loop is playing"));
             clearChat(c);
             c.takeScreenshot("wildcard-backrooms");
             stopWildcard(world);

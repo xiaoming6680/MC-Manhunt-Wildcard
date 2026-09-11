@@ -10,10 +10,8 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.world.LevelLoadingScreen;
 import net.minecraft.client.sound.MovingSoundInstance;
 import net.minecraft.client.sound.SoundInstance;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
+import com.xiaoming.hunterwildcard.sound.HunterWildcardSounds;
 import net.minecraft.sound.SoundCategory;
-import net.minecraft.sound.SoundEvent;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.random.Random;
@@ -23,16 +21,14 @@ import net.minecraft.util.math.random.Random;
  * ambience loop and the 6-chunk view distance lock. The server only tells us when to cover.
  */
 public final class BackroomsClient {
-    public static final SoundEvent AMBIENCE = Registry.register(Registries.SOUND_EVENT,
-            Identifier.of(HunterWildcardMod.MOD_ID, "backrooms_ambience"),
-            SoundEvent.of(Identifier.of(HunterWildcardMod.MOD_ID, "backrooms_ambience")));
-
     private static final double SINK_BLOCKS = 3.0D;
     private static final int SINK_TICKS = 10;
     private static final double ARRIVAL_CEILING_BLOCKS = 0.75D;
     private static final int ARRIVAL_HOLD_TICKS = 3;
     private static final int ARRIVAL_EASE_TICKS = 8;
-    private static final float AMBIENCE_VOLUME = 0.08F;
+    private static final float AMBIENCE_VOLUME = 0.2F;
+    /** The client stops every sound while switching dimension; wait for that to pass before starting ours. */
+    private static final int AMBIENCE_START_DELAY_TICKS = 20;
     private static final int AMBIENCE_FADE_TICKS = 40;
     private static final int LOCKED_VIEW_DISTANCE = 6;
 
@@ -42,6 +38,7 @@ public final class BackroomsClient {
     private static boolean wasInBackrooms;
     private static Integer viewDistanceBefore;
     private static AmbienceLoop ambience;
+    private static int ticksInBackrooms;
 
     private BackroomsClient() {
     }
@@ -112,19 +109,26 @@ public final class BackroomsClient {
         if (inBackrooms && !wasInBackrooms) {
             sinkAge = -1;
             arrivalAge = 0;
+            ticksInBackrooms = 0;
             lockViewDistance(client);
-            startAmbience(client);
         } else if (!inBackrooms && wasInBackrooms) {
             restoreViewDistance(client);
             stopAmbience();
         }
         wasInBackrooms = inBackrooms;
         if (inBackrooms) {
+            ticksInBackrooms++;
             lockViewDistance(client);
+            // Started late and re-checked every second, so a loop killed by the dimension switch
+            // (or by the player's own sound settings toggling) comes back on its own.
+            if (ticksInBackrooms >= AMBIENCE_START_DELAY_TICKS && ticksInBackrooms % 20 == 0) {
+                startAmbience(client);
+            }
         }
     }
 
     private static void reset(MinecraftClient client) {
+        ticksInBackrooms = 0;
         holdTicks = 0;
         sinkAge = -1;
         arrivalAge = -1;
@@ -153,12 +157,17 @@ public final class BackroomsClient {
     }
 
     private static void startAmbience(MinecraftClient client) {
-        if (ambience != null && !ambience.isDone()) {
+        if (ambience != null && !ambience.isDone() && client.getSoundManager().isPlaying(ambience)) {
             ambience.cancelFade();
             return;
         }
         ambience = new AmbienceLoop();
         client.getSoundManager().play(ambience);
+    }
+
+    public static boolean isAmbiencePlaying() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        return ambience != null && !ambience.isDone() && client.getSoundManager().isPlaying(ambience);
     }
 
     private static void stopAmbience() {
@@ -173,7 +182,7 @@ public final class BackroomsClient {
         private int fadeOutAge = -1;
 
         private AmbienceLoop() {
-            super(AMBIENCE, SoundCategory.AMBIENT, Random.create());
+            super(HunterWildcardSounds.BACKROOMS_AMBIENCE, SoundCategory.AMBIENT, Random.create());
             this.repeat = true;
             this.repeatDelay = 0;
             this.relative = true;
@@ -181,8 +190,9 @@ public final class BackroomsClient {
             this.volume = 0.0F;
         }
 
+        /** The loop starts at volume zero for the fade-in; without this the engine skips it as silent. */
         @Override
-        public boolean canPlay() {
+        public boolean shouldAlwaysPlay() {
             return true;
         }
 
