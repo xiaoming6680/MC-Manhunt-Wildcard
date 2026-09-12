@@ -610,5 +610,8 @@
   "hunterwildcard.msg.wildcard.space_shift.countdown": "空间波动：%s 秒后重新分配位置",
   "hunterwildcard.msg.wildcard.space_shift.shifted": "空间波动：位置已重新分配！",
   "hunterwildcard.msg.wildcard.world_tilt.countdown": "地动山摇：%s 秒后重力翻转！",
-  "hunterwildcard.msg.wildcard.world_tilt.tilted": "地动山摇！重力翻转了！"
+  "hunterwildcard.msg.wildcard.world_tilt.tilted": "地动山摇！重力翻转了！",
+  "hunterwildcard.config.boolean.environment_kills_enabled": "环境死亡计入击杀",
+  "hunterwildcard.screen.summary.kill_credit_no_env": "打击记功 %s 秒 · 环境死亡不计",
+  "hunterwildcard.screen.hint.environment_kills_disabled": "已关闭：摔死、怪物等纯环境死亡不算猎人击杀。"
 }

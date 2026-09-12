@@ -124,7 +124,7 @@ public class RespawnManager {
             } else {
                 announceKillCountMilestone(context, remainingKills);
             }
-        } else if (role == PlayerRole.RUNNER && config.getHunterVictoryType() == HunterVictoryType.RUNNER_KILL_COUNT) {
+        } else if (role == PlayerRole.RUNNER && config.getHunterVictoryType() == HunterVictoryType.RUNNER_KILL_COUNT && credit.environment()) {
             // Environment death that has not filled the quota yet: still a top-right card, just calmer.
             HunterWildcardPackets.sendHudFeedback(
                     context,
@@ -191,6 +191,9 @@ public class RespawnManager {
         if (creditedHunter != null) {
             runnerKillCount++;
             return new KillCredit(true, false, 0);
+        }
+        if (!config.environmentKillsEnabled) {
+            return KillCredit.NONE;
         }
         environmentDeaths++;
         if (environmentDeaths >= config.environmentDeathsPerKill) {
@@ -398,7 +401,7 @@ public class RespawnManager {
         ModConfig config = context.getConfig();
         String spec;
         if (config.getHunterVictoryType() == HunterVictoryType.RUNNER_KILL_COUNT) {
-            spec = config.environmentDeathsPerKill > 1
+            spec = config.environmentKillsEnabled && config.environmentDeathsPerKill > 1
                     ? HunterWildcardText.spec("hud.objective.hunter_kills_env", runnerKillCount, config.hunterRunnerKillTarget, environmentDeaths, config.environmentDeathsPerKill)
                     : HunterWildcardText.spec("hud.objective.hunter_kills", runnerKillCount, config.hunterRunnerKillTarget);
         } else {
@@ -498,7 +501,7 @@ public class RespawnManager {
                     : HunterWildcardText.translatable("msg.death.runner_killed", playerName, hunterName);
         }
 
-        if (config.getHunterVictoryType() == HunterVictoryType.RUNNER_KILL_COUNT) {
+        if (config.getHunterVictoryType() == HunterVictoryType.RUNNER_KILL_COUNT && credit.environment()) {
             if (credit.counted()) {
                 return HunterWildcardText.translatable("msg.death.runner_env_counted", playerName);
             }

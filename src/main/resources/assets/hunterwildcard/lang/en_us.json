@@ -610,5 +610,8 @@
   "hunterwildcard.msg.wildcard.space_shift.countdown": "Space shift: new positions in %s s",
   "hunterwildcard.msg.wildcard.space_shift.shifted": "Space shift: positions reassigned!",
   "hunterwildcard.msg.wildcard.world_tilt.countdown": "World tilt: gravity flips in %s s!",
-  "hunterwildcard.msg.wildcard.world_tilt.tilted": "World tilt! Gravity has flipped!"
+  "hunterwildcard.msg.wildcard.world_tilt.tilted": "World tilt! Gravity has flipped!",
+  "hunterwildcard.config.boolean.environment_kills_enabled": "Count environment deaths",
+  "hunterwildcard.screen.summary.kill_credit_no_env": "Hit credit %ss - environment deaths do not count",
+  "hunterwildcard.screen.hint.environment_kills_disabled": "Off: falls, mobs and other pure environment deaths never count as hunter kills."
 }

@@ -654,6 +654,7 @@ public class HunterWildcardPackets {
             int runnerSpeedPercent,
             int hunterHitCreditSeconds,
             int environmentDeathsPerKill,
+            boolean environmentKillsEnabled,
             boolean randomRespawnEnabled,
             int runnerRespawnDistance,
             int hunterRespawnDistance,
@@ -724,6 +725,7 @@ public class HunterWildcardPackets {
                     buf.readInt(),
                     buf.readInt(),
                     buf.readBoolean(),
+                    buf.readBoolean(),
                     buf.readInt(),
                     buf.readInt(),
                     buf.readInt(),
@@ -731,27 +733,27 @@ public class HunterWildcardPackets {
                     buf.readBoolean(),
                     buf.readBoolean(),
                     buf.readInt(),
-                    buf.readString(32),
-                    buf.readString(32),
+                    buf.readString(),
+                    buf.readString(),
                     buf.readBoolean(),
                     buf.readBoolean(),
                     buf.readInt(),
                     buf.readBoolean(),
-                    buf.readString(128),
+                    buf.readString(),
                     buf.readInt(),
                     buf.readInt(),
                     buf.readInt(),
                     buf.readInt(),
                     buf.readBoolean(),
-                    buf.readString(128),
+                    buf.readString(),
                     buf.readInt(),
-                    buf.readString(32),
+                    buf.readString(),
                     buf.readInt(),
-                    buf.readString(32),
+                    buf.readString(),
                     buf.readInt(),
                     buf.readInt(),
-                    buf.readString(32),
-                    buf.readString(32),
+                    buf.readString(),
+                    buf.readString(),
                     buf.readBoolean(),
                     buf.readInt(),
                     readWildcardToggles(buf)
@@ -793,6 +795,7 @@ public class HunterWildcardPackets {
             buf.writeInt(runnerSpeedPercent);
             buf.writeInt(hunterHitCreditSeconds);
             buf.writeInt(environmentDeathsPerKill);
+            buf.writeBoolean(environmentKillsEnabled);
             buf.writeBoolean(randomRespawnEnabled);
             buf.writeInt(runnerRespawnDistance);
             buf.writeInt(hunterRespawnDistance);
@@ -863,6 +866,7 @@ public class HunterWildcardPackets {
                     config.runnerSpeedPercent,
                     config.hunterHitCreditSeconds,
                     config.environmentDeathsPerKill,
+                    config.environmentKillsEnabled,
                     config.randomRespawnEnabled,
                     config.runnerRespawnDistance,
                     config.hunterRespawnDistance,
@@ -934,6 +938,7 @@ public class HunterWildcardPackets {
             config.runnerSpeedPercent = runnerSpeedPercent;
             config.hunterHitCreditSeconds = hunterHitCreditSeconds;
             config.environmentDeathsPerKill = environmentDeathsPerKill;
+            config.environmentKillsEnabled = environmentKillsEnabled;
             config.randomRespawnEnabled = randomRespawnEnabled;
             config.runnerRespawnDistance = runnerRespawnDistance;
             config.hunterRespawnDistance = hunterRespawnDistance;

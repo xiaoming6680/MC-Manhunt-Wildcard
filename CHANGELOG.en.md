@@ -19,6 +19,7 @@ English | [Simplified Chinese](CHANGELOG.md)
 - Players glow in their team colour while picking sides in the lobby.
 - A respawned runner sees the hunter who killed them glow for 10 s, with their name, so they know which way to run.
 - The kill feedback card is back to its normal size; the status card hides while a draw animation plays.
+- Kill credit gained a "Count environment deaths" toggle (Rules > Kill credit); off means pure environment deaths never add to the hunters' kill count.
 - Drop Bomb: fused items no longer merge with nearby drops, which used to make some of them vanish without exploding.
 - World Tilt: gravity really turns sideways (no vertical gravity, a horizontal pull); mouse look, movement, jumping, standing on walls and the player model all follow the new gravity frame with a 3-second transition. Hitboxes stay upright, a vanilla limitation.
 - Wildcard interval and duration can each be fixed or random (min-max); cards drawn earlier this round are weighted down by 1/(1+draws) so fresh ones come up first.

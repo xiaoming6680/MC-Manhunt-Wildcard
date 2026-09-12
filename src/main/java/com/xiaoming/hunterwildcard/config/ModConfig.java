@@ -64,6 +64,8 @@ public class ModConfig {
     public int hunterHitCreditSeconds = 15;
     /** Pure environment deaths (no hunter involved) needed to count as one hunter kill in kill-count mode. */
     public int environmentDeathsPerKill = 1;
+    /** Off: falls, mobs and other pure environment deaths never count towards the hunters' kill target. */
+    public boolean environmentKillsEnabled = true;
     /** Respawn at a random surface spot away from the death point (and, for runners, away from hunters). */
     public boolean randomRespawnEnabled = true;
     /** Minimum distance from the death point; the maximum is twice this. */
@@ -301,6 +303,7 @@ public class ModConfig {
         runnerSpeedPercent = other.runnerSpeedPercent;
         hunterHitCreditSeconds = other.hunterHitCreditSeconds;
         environmentDeathsPerKill = other.environmentDeathsPerKill;
+        environmentKillsEnabled = other.environmentKillsEnabled;
         randomRespawnEnabled = other.randomRespawnEnabled;
         runnerRespawnDistance = other.runnerRespawnDistance;
         hunterRespawnDistance = other.hunterRespawnDistance;
@@ -366,6 +369,7 @@ public class ModConfig {
         runnerSpeedPercent = other.runnerSpeedPercent;
         hunterHitCreditSeconds = other.hunterHitCreditSeconds;
         environmentDeathsPerKill = other.environmentDeathsPerKill;
+        environmentKillsEnabled = other.environmentKillsEnabled;
         randomRespawnEnabled = other.randomRespawnEnabled;
         runnerRespawnDistance = other.runnerRespawnDistance;
         hunterRespawnDistance = other.hunterRespawnDistance;

@@ -699,7 +699,9 @@ public class HunterWildcardConfigScreen extends Screen {
                     respawnSummary(config.hunterRespawnMode(), config.hunterLives(), RespawnMode.INFINITE),
                     respawnSummary(isHunterKillCountMode() ? RespawnMode.INFINITE.name() : config.runnerRespawnMode(), config.runnerLives(), RespawnMode.LIMITED_LIVES),
                     tr(config.randomRespawnEnabled() ? key("screen.toggle.enabled") : key("screen.toggle.disabled"))));
-            case KILL_CREDIT -> tr(spec("screen.summary.kill_credit", config.hunterHitCreditSeconds(), config.environmentDeathsPerKill()));
+            case KILL_CREDIT -> tr(config.environmentKillsEnabled()
+                    ? spec("screen.summary.kill_credit", config.hunterHitCreditSeconds(), config.environmentDeathsPerKill())
+                    : spec("screen.summary.kill_credit_no_env", config.hunterHitCreditSeconds()));
             case BALANCE -> tr(spec("screen.summary.balance", config.hunterDamageMultiplierPercent(), config.hunterSpeedPercent(), config.runnerSpeedPercent()));
         };
     }
@@ -849,8 +851,13 @@ public class HunterWildcardConfigScreen extends Screen {
         card.number(NumberField.HUNTER_HIT_CREDIT_SECONDS);
         card.hint(key("screen.hint.hit_credit"));
         card.gap(4);
-        card.number(NumberField.ENVIRONMENT_DEATHS_PER_KILL);
-        card.hint(key("screen.hint.environment_deaths"));
+        card.booleanField(BooleanField.ENVIRONMENT_KILLS_ENABLED);
+        if (editableConfig.environmentKillsEnabled()) {
+            card.number(NumberField.ENVIRONMENT_DEATHS_PER_KILL);
+            card.hint(key("screen.hint.environment_deaths"));
+        } else {
+            card.hint(key("screen.hint.environment_kills_disabled"));
+        }
         if (!isHunterKillCountMode()) {
             card.hint(key("screen.hint.environment_deaths_unused"));
         }
@@ -2907,6 +2914,7 @@ public class HunterWildcardConfigScreen extends Screen {
     private boolean getBoolean(ConfigSnapshot config, BooleanField field) {
         return switch (field) {
             case HUNTER_PREPARE_BOUNDARY_ENABLED -> config.hunterPrepareBoundaryEnabled();
+            case ENVIRONMENT_KILLS_ENABLED -> config.environmentKillsEnabled();
             case RUNNER_DEATH_NO_DROPS -> config.runnerDeathNoDrops();
             case HUNTER_DEATH_NO_DROPS -> config.hunterDeathNoDrops();
             case PIGLIN_PEARL_BOOST_ENABLED -> config.piglinPearlBoostEnabled();
@@ -2920,6 +2928,7 @@ public class HunterWildcardConfigScreen extends Screen {
         ModConfig copy = config.toConfig();
         switch (field) {
             case HUNTER_PREPARE_BOUNDARY_ENABLED -> copy.hunterPrepareBoundaryEnabled = value;
+            case ENVIRONMENT_KILLS_ENABLED -> copy.environmentKillsEnabled = value;
             case RUNNER_DEATH_NO_DROPS -> copy.runnerDeathNoDrops = value;
             case HUNTER_DEATH_NO_DROPS -> copy.hunterDeathNoDrops = value;
             case PIGLIN_PEARL_BOOST_ENABLED -> copy.piglinPearlBoostEnabled = value;
@@ -3568,7 +3577,8 @@ public class HunterWildcardConfigScreen extends Screen {
         PIGLIN_PEARL_BOOST_ENABLED(key("config.boolean.piglin_pearl_boost_enabled"), true),
         RANDOM_RESPAWN_ENABLED(key("config.boolean.random_respawn_enabled"), true),
         LOCATOR_BAR_TEAM_ONLY(key("config.boolean.locator_bar_team_only"), true),
-        SURVIVE_BORDER_ENABLED(key("config.boolean.survive_border_enabled"), false);
+        SURVIVE_BORDER_ENABLED(key("config.boolean.survive_border_enabled"), false),
+        ENVIRONMENT_KILLS_ENABLED(key("config.boolean.environment_kills_enabled"), true);
 
         private final String label;
         private final boolean live;
