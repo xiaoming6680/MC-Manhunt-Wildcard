@@ -11,6 +11,7 @@
     "PlayerDamageMixin",
     "LivingEntityDamageMixin",
     "EndGatewayCollisionMixin",
+    "ItemEntityMergeMixin",
     "PlayerDisplayNameMixin",
     "ServerPlayerListNameMixin",
     "PlayerDropItemMixin",

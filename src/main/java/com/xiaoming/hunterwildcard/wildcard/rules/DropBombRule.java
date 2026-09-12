@@ -17,9 +17,11 @@ import net.minecraft.world.explosion.ExplosionBehavior;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -38,7 +40,14 @@ public class DropBombRule implements WildcardRule {
         }
     };
 
+    private static final Set<UUID> ARMED_ITEMS = new HashSet<>();
+
     private final List<ArmedItem> armed = new ArrayList<>();
+
+    /** Checked by {@code ItemEntityMergeMixin} so fused items are never merged away before they go off. */
+    public static boolean isArmed(ItemEntity item) {
+        return !ARMED_ITEMS.isEmpty() && ARMED_ITEMS.contains(item.getUuid());
+    }
     private final Map<UUID, Integer> lastWarningTick = new HashMap<>();
     private int ticks;
 
@@ -46,6 +55,7 @@ public class DropBombRule implements WildcardRule {
     public void onStart(GameContext context) {
         ticks = 0;
         armed.clear();
+        ARMED_ITEMS.clear();
         lastWarningTick.clear();
     }
 
@@ -55,6 +65,7 @@ public class DropBombRule implements WildcardRule {
             return;
         }
         armed.add(new ArmedItem(world.getRegistryKey(), item.getUuid(), player.getUuid(), ticks + FUSE_TICKS));
+        ARMED_ITEMS.add(item.getUuid());
         world.playSound(null, item.getX(), item.getY(), item.getZ(), SoundEvents.ENTITY_TNT_PRIMED, SoundCategory.PLAYERS, 0.7F, 1.4F);
 
         Integer last = lastWarningTick.get(player.getUuid());
@@ -78,6 +89,7 @@ public class DropBombRule implements WildcardRule {
             Entity entity = world == null ? null : world.getEntity(entry.itemId());
             if (!(entity instanceof ItemEntity item) || item.isRemoved()) {
                 iterator.remove();
+                ARMED_ITEMS.remove(entry.itemId());
                 continue;
             }
 
@@ -89,6 +101,7 @@ public class DropBombRule implements WildcardRule {
             }
 
             iterator.remove();
+            ARMED_ITEMS.remove(entry.itemId());
             Entity thrower = world.getEntity(entry.throwerId());
             world.createExplosion(
                     item,
@@ -107,6 +120,7 @@ public class DropBombRule implements WildcardRule {
     @Override
     public void onStop(GameContext context) {
         armed.clear();
+        ARMED_ITEMS.clear();
         lastWarningTick.clear();
     }
 
