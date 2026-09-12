@@ -118,7 +118,7 @@ When the Backrooms end you drop back over your entry point with no fall damage:
 | Vision | Hunter Radar | Runners glow all along; they get a warning when a hunter comes within the configured range |
 | Vision | Who Are You? | Everyone becomes Steve, name tags hide, tab list and chat show "Player" |
 | Vision | Tiny Players | Everyone shrinks to about one block tall |
-| Vision | World Tilt | 30 s after the draw gravity turns sideways (with a countdown) and the view rolls to match, until the wildcard ends |
+| Vision | World Tilt | 30 s after the draw gravity turns sideways (with a countdown); look, movement and jumping work in the new gravity so you can stand on trunks and walls, until the wildcard ends |
 | World & Items | Supply Drop | Chests land at the midpoint between the sides (one per runner); a beacon marks the spot 20 s ahead |
 | World & Items | Drop Bomb | Anything thrown from the inventory explodes after 2 s without breaking blocks or destroying drops |
 | World & Items | Chain Mining | Breaking a block also clears the 3x3x3 ahead along your look direction, only what your tool can harvest |

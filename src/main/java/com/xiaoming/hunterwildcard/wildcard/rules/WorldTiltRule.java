@@ -19,7 +19,7 @@ public class WorldTiltRule implements WildcardRule {
     public static final double GRAVITY_PER_TICK = 0.08;
     public static final double TERMINAL_SPEED = 3.0;
     private static final int TILT_DELAY_TICKS = 30 * 20;
-    private static final int TRANSITION_TICKS = 40;
+    private static final int TRANSITION_TICKS = 60;
     private static final int RESYNC_INTERVAL_TICKS = 100;
 
     private int ticks;

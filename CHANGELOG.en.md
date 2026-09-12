@@ -18,7 +18,8 @@ English | [Simplified Chinese](CHANGELOG.md)
 - Backrooms: every 20 s both sides glow for 5 s, hunters red and runners blue (all glow effects are team-coloured).
 - Players glow in their team colour while picking sides in the lobby.
 - A respawned runner sees the hunter who killed them glow for 10 s, with their name, so they know which way to run.
-- The kill feedback card is back to its normal size.
+- The kill feedback card is back to its normal size; the status card hides while a draw animation plays.
+- World Tilt: gravity really turns sideways (no vertical gravity, a horizontal pull); mouse look, movement, jumping, standing on walls and the player model all follow the new gravity frame with a 3-second transition. Hitboxes stay upright, a vanilla limitation.
 - Wildcard interval and duration can each be fixed or random (min-max); cards drawn earlier this round are weighted down by 1/(1+draws) so fresh ones come up first.
 - Menu: wildcard toggles are grouped into Combat / Mobility / Vision / World & Items cards, each with all-on/all-off; the home page puts team picking and Start at the top; scrolling no longer rebuilds widgets (fixes inputs and dropdowns that sometimes would not react), server syncs wait while a dropdown is open, leaving a wildcard's settings returns to the previous scroll position, and the settings header no longer shows a format error.
 - Config: toggles moved to an `enabledWildcards` map (old `enableXxx` keys migrate automatically), radar interval became `hunterRadarWarningDistance`, and `spaceShiftIntervalSeconds` plus the timing-mode fields were added.

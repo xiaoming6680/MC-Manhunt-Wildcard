@@ -20,7 +20,12 @@
   "client": [
     "client.PlayerListEntrySkinMixin",
     "client.CameraSinkMixin",
-    "client.CameraRollMixin"
+    "client.CameraRollMixin",
+    "client.TiltLookMixin",
+    "client.TiltMoveInputMixin",
+    "client.TiltJumpMixin",
+    "client.TiltGroundMixin",
+    "client.TiltModelMixin"
   ],
   "injectors": {
     "defaultRequire": 1

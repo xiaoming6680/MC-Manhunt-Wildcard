@@ -185,7 +185,8 @@ public class WildcardDrawOverlay {
         introPanelBottom = 0;
         renderDrawPanel(context);
         renderIntroPanel(context);
-        if (GameStatusHud.shouldRender()) {
+        // The status card would sit on top of the draw animation; it steps aside while a draw is playing.
+        if (GameStatusHud.shouldRender() && drawStartTimeMs < 0L) {
             GameStatusHud.render(context, introPanelBottom > 0 ? introPanelBottom + 4 : 6);
         }
         renderObjectiveStatusPanel(context);
