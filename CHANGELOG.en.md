@@ -1,6 +1,43 @@
 # Changelog
 
-English | [Simplified Chinese](CHANGELOG.md)
+English | [Simplified Chinese](CHANGELOG.zh-CN.md)
+
+## 1.4.5
+
+- Add separate Fabric builds for Minecraft 1.21.11, 26.1, 26.1.1, 26.1.2 and 26.2; Java 21 for 1.21.11 and Java 25 for 26.x.
+- Redesign the match, rules and wildcard menus with searchable cards, editable drafts, save-conflict handling, item selection and local display preferences.
+- Update English-first documentation, Modrinth project copy, screenshots and release packaging.
+
+
+- Eliminated players start in free spectator mode. Z / X visits any other online player's position across teams while retaining free movement; players waiting to respawn still follow teammates.
+- Fix death spectator cameras stalling during target switches and long-distance or dimension teleports. Wait for position confirmation and entity tracking, coalesce rapid switches, and avoid old-world following and sneak-triggered teleport loops.
+- Fix World Tilt swimming steering and diving using the vertical world axis. Preserve vanilla sprint swimming, Depth Strider, Dolphin's Grace and Slow Falling movement.
+- Accept full-width digits and colons and the Chinese seconds suffix in time inputs. Raising only the minimum extends the previous maximum on save; explicitly reversed bounds show a clear error.
+- Defer pending server refreshes until input dispatch is complete, preventing widgets from being replaced during a click.
+
+- Rename Blood Rage to Last Stand, including its messages, while preserving the effect and configuration ID.
+
+- Fix the Portals wildcard sending players above the Nether bedrock roof. Validate footing, headroom and hazards, and recheck the exit before travel.
+
+- Respawn in the Overworld after Nether or End deaths, including random placement and returning from teammate cameras.
+- Mark Pearl Frenzy grants by source and reclaim unused grants when the event ends, preserving ordinary pearls. Transferred, dropped and later-retrieved expired grants are also cleaned up.
+- Add an optional 0–100% blaze rod drop chance with saving, synchronization and live adjustment. Disabled by default to retain vanilla behavior.
+- Fix raw duration translation strings appearing after respawning players in team lists.
+- Move configuration traffic to protocol v3; both sides need the same new JAR.
+
+- Automatically spectate living teammates while waiting to respawn. Cycle with rebindable Z / X keys; invalid targets are replaced automatically, with free spectator flight when no teammates remain.
+- Replace the black death cover with a compact transparent panel. Preserve respawn timers, lives, hunter penalties, and respawn placement; the camera location never becomes the respawn location.
+
+- Reset advancement progress for all online players, including spectators, whenever a new round successfully enters preparation. Completed advancements and partial criteria are cleared, synced, and saved.
+
+- Fix the preparation countdown ignoring the hunter and runner death-inventory settings. Each side's toggle now also applies during preparation, preserving inventory, armor, and offhand items through respawn.
+- Hide the objective, status, and wildcard introduction panels during the draw animation, then restore them when it finishes.
+- Center the objective panel vertically on the left edge. Keep the original event-card width and font/icon sizes while reducing card height from 76 to 60.
+
+## 1.4.1
+
+- Fix `custom_payload` decoding failures caused by different builds reusing the same packet channels. All mod packets now use versioned protocol channels so legacy data cannot enter current decoders.
+- Incompatible peers receive a clear prompt to install the same mod JAR on the client and server. Update both sides and remove the old JAR; this release does not decode legacy configuration packets.
 
 ## 1.4.0
 

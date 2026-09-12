@@ -10,6 +10,11 @@ import com.xiaoming.hunterwildcard.team.PlayerRole;
 import com.xiaoming.hunterwildcard.util.HunterWildcardText;
 import com.xiaoming.hunterwildcard.util.PlayerUtil;
 import net.minecraft.network.packet.s2c.play.PositionFlag;
+import net.minecraft.network.packet.s2c.play.SetCameraEntityS2CPacket;
+import com.xiaoming.hunterwildcard.mixin.TeleportPendingAccessor;
+import net.fabricmc.fabric.api.networking.v1.PlayerLookup;
+import net.minecraft.entity.Entity;
+import net.minecraft.network.packet.c2s.play.ClientStatusC2SPacket;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.entity.effect.StatusEffects;
@@ -23,6 +28,8 @@ import net.minecraft.world.GameMode;
 import net.minecraft.world.World;
 
 import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -37,12 +44,15 @@ import java.util.UUID;
  * within the credit window. Pure environment deaths are counted separately and every N of them
  * (configurable) convert into one hunter kill, so dying on purpose never resets a chase for free.
  * <p>
- * Waiting for respawn is spent behind a full-screen cover, held in place in spectator mode, and the
- * respawn point is a random surface spot away from the death point (runners also avoid hunters).
+ * Waiting players follow living teammates; eliminated players freely visit any online player's position. The original respawn
+ * anchor is saved separately, so watching someone never changes the respawn placement rules.
  */
 public class RespawnManager {
     private static final int DEATH_WAIT_SYNC_INTERVAL_TICKS = 20;
-    private static final double HOLD_RADIUS = 1.5D;
+    private static final double CAMERA_RELOCATE_DISTANCE_SQUARED = 64 * 64;
+    private final Set<UUID> pendingDeathRespawns = new HashSet<>();
+    private final Set<UUID> pendingRespawnSetup = new HashSet<>();
+    private final Map<UUID, DeathSpectator> spectators = new HashMap<>();
 
     private final Map<UUID, WaitingPlayer> waiting = new HashMap<>();
     private final Map<UUID, Integer> remainingLives = new HashMap<>();
@@ -77,6 +87,7 @@ public class RespawnManager {
         if (role == null) {
             return DeathOutcome.none();
         }
+        pendingDeathRespawns.add(player.getUuid());
 
         ModConfig config = context.getConfig();
         // Previous deaths of this hunter drive the escalating respawn wait computed below.
@@ -205,14 +216,25 @@ public class RespawnManager {
     }
 
     public void onAfterRespawn(GameContext context, ServerPlayerEntity player, CompassTracker compassTracker) {
+        pendingDeathRespawns.remove(player.getUuid());
+        if (outPlayers.contains(player.getUuid()) || waiting.containsKey(player.getUuid())) {
+            // Fabric fires before the network handler replaces its old player. Teleport only after that replacement.
+            pendingRespawnSetup.add(player.getUuid());
+            return;
+        }
+        finishVanillaRespawn(context, player, compassTracker);
+    }
+
+    private void finishVanillaRespawn(GameContext context, ServerPlayerEntity player, CompassTracker compassTracker) {
         if (outPlayers.contains(player.getUuid())) {
-            player.changeGameMode(GameMode.SPECTATOR);
+            beginSpectating(context, player, player.getEntityWorld().getRegistryKey(), player.getEntityPos());
             player.sendMessage(HunterWildcardText.translatable("msg.respawn.out_spectating"), false);
             return;
         }
 
         WaitingPlayer wait = waiting.get(player.getUuid());
         if (wait != null) {
+            if (returnsToOverworld(wait)) returnToOverworld(context, player);
             if (wait.remainingTicks <= 0) {
                 waiting.remove(player.getUuid());
                 finishRespawn(context, player, wait, compassTracker);
@@ -243,12 +265,26 @@ public class RespawnManager {
         player.sendMessage(HunterWildcardText.translatable("msg.respawn.killer_highlighted", PlayerUtil.displayNameText(killer), KILLER_HIGHLIGHT_TICKS / 20).formatted(Formatting.RED), false);
     }
 
-    /** Puts a freshly respawned player behind the cover, parked in spectator mode at the hold anchor. */
+    private static boolean returnsToOverworld(WaitingPlayer wait) {
+        return World.NETHER.equals(wait.deathWorld) || World.END.equals(wait.deathWorld);
+    }
+
+    /** Keep a valid vanilla Overworld respawn; dimension-specific anchors fall back to world spawn. */
+    private void returnToOverworld(GameContext context, ServerPlayerEntity player) {
+        ServerWorld overworld = context.getServer().getOverworld();
+        if (player.getEntityWorld() == overworld) return;
+        var spawn = overworld.getSpawnPoint();
+        BlockPos pos = player.getWorldSpawnPos(overworld, spawn.getPos());
+        player.setVelocity(Vec3d.ZERO);
+        player.teleport(overworld, pos.getX() + 0.5D, pos.getY(), pos.getZ() + 0.5D,
+                Set.<PositionFlag>of(), spawn.yaw(), spawn.pitch(), true);
+    }
+
+    /** Save the respawn destination independently of the teammate camera. */
     private void beginHolding(GameContext context, ServerPlayerEntity player, WaitingPlayer wait) {
-        player.changeGameMode(GameMode.SPECTATOR);
         boolean relocate = context.getConfig().randomRespawnEnabled;
         ServerWorld deathWorld = context.getServer().getWorld(wait.deathWorld);
-        if (relocate && deathWorld != null && !BackroomsDimension.isBackrooms(deathWorld)) {
+        if (relocate && !returnsToOverworld(wait) && deathWorld != null && !BackroomsDimension.isBackrooms(deathWorld)) {
             wait.holdWorld = deathWorld.getRegistryKey();
             wait.holdPos = wait.deathPos;
         } else {
@@ -256,23 +292,183 @@ public class RespawnManager {
             wait.holdPos = player.getEntityPos();
         }
         wait.holding = true;
-        holdInPlace(context, player, wait);
+        beginSpectating(context, player, wait.holdWorld, wait.holdPos);
         sendDeathWait(player, wait);
     }
 
-    private void holdInPlace(GameContext context, ServerPlayerEntity player, WaitingPlayer wait) {
-        ServerWorld world = context.getServer().getWorld(wait.holdWorld);
-        if (world == null) {
+    private void beginSpectating(GameContext context, ServerPlayerEntity player, RegistryKey<World> world, Vec3d pos) {
+        DeathSpectator spectator = new DeathSpectator(context.getTeamManager().getRole(player), world, pos, player.getYaw(), player.getPitch());
+        spectators.put(player.getUuid(), spectator);
+        player.changeGameMode(GameMode.SPECTATOR);
+        restoreAnchor(context, player, spectator);
+        updateSpectating(context, player, spectator, 0);
+    }
+
+    /** Only this player's server-validated teammate list can be cycled; no client-supplied entity IDs. */
+    public void cycleSpectating(GameContext context, ServerPlayerEntity player, boolean previous) {
+        DeathSpectator spectator = spectators.get(player.getUuid());
+        if (spectator == null || !player.isSpectator() || player.isDead()) return;
+        updateSpectating(context, player, spectator, previous ? -1 : 1);
+    }
+
+    /** Runs before vanilla copies camera coordinates into the spectator's current world. */
+    public void beforeSpectatorTick(ServerPlayerEntity player) {
+        if (!spectators.containsKey(player.getUuid())) return;
+        Entity camera = player.getCameraEntity();
+        if (camera != player && (camera.isRemoved() || !camera.isAlive() || player.isSneaking()
+                || camera.getEntityWorld() != player.getEntityWorld()
+                || camera.getEntityPos().squaredDistanceTo(player.getEntityPos()) > CAMERA_RELOCATE_DISTANCE_SQUARED)) {
+            setDeathCamera(player, player);
+        }
+    }
+
+    /** Prevent vanilla teleportSpectatingPlayers from racing our pending camera transition. */
+    public void beforeTargetTeleport(ServerPlayerEntity target) {
+        for (var entry : spectators.entrySet()) {
+            var viewer = target.getEntityWorld().getServer().getPlayerManager().getPlayer(entry.getKey());
+            if (viewer != null && viewer.getCameraEntity() == target) {
+                setDeathCamera(viewer, viewer);
+                entry.getValue().positionedTarget = null;
+            }
+        }
+    }
+
+    private static void setDeathCamera(ServerPlayerEntity player, Entity target) {
+        if (player.getCameraEntity() == target) return;
+        ((DeathCameraAccess) player).hunterwildcard$setDeathCamera(target);
+        player.networkHandler.sendPacket(new SetCameraEntityS2CPacket(target));
+        player.networkHandler.syncWithPlayerPosition();
+    }
+
+    private static boolean teleportPending(ServerPlayerEntity player) {
+        return ((TeleportPendingAccessor) player.networkHandler).hunterwildcard$pendingTeleport() != null;
+    }
+
+    private void updateSpectating(GameContext context, ServerPlayerEntity player, DeathSpectator spectator, int direction) {
+        if (outPlayers.contains(player.getUuid())) {
+            updateFreeSpectating(context, player, spectator, direction);
             return;
         }
-        if (player.getEntityWorld() != world || player.getEntityPos().squaredDistanceTo(wait.holdPos) > HOLD_RADIUS * HOLD_RADIUS) {
-            player.setVelocity(Vec3d.ZERO);
-            player.teleport(world, wait.holdPos.x, wait.holdPos.y, wait.holdPos.z, Set.<PositionFlag>of(), player.getYaw(), player.getPitch(), true);
+        List<ServerPlayerEntity> targets = context.getParticipants().stream()
+                .filter(target -> target != player && !target.isRemoved() && target.isAlive() && !target.isSpectator()
+                        && spectator.role != null && context.getTeamManager().getRole(target) == spectator.role
+                        && !waiting.containsKey(target.getUuid()) && !outPlayers.contains(target.getUuid()))
+                .sorted(Comparator.comparing(ServerPlayerEntity::getUuid)).toList();
+        int current = -1;
+        for (int i = 0; i < targets.size(); i++) if (targets.get(i).getUuid().equals(spectator.target)) current = i;
+        ServerPlayerEntity target = targets.isEmpty() ? null : targets.get(current < 0
+                ? (direction < 0 ? targets.size() - 1 : 0) : Math.floorMod(current + direction, targets.size()));
+        UUID targetId = target == null ? null : target.getUuid();
+        boolean targetChanged = !java.util.Objects.equals(spectator.target, targetId);
+        boolean changed = !java.util.Objects.equals(spectator.target, targetId) || spectator.targetCount != targets.size();
+        spectator.target = targetId;
+        spectator.targetCount = targets.size();
+        if (changed || direction != 0 || tickCounter % DEATH_WAIT_SYNC_INTERVAL_TICKS == 0) {
+            HunterWildcardPackets.sendDeathSpectate(player, true, target == null ? "" : PlayerUtil.displayNameSpec(target), targets.size());
         }
+        if (targetChanged) {
+            spectator.positionedTarget = null;
+            setDeathCamera(player, player);
+        }
+        if (target == null || player.isSneaking()) {
+            setDeathCamera(player, player);
+            return;
+        }
+        beforeSpectatorTick(player);
+        // Never supersede an outstanding position confirmation with another camera teleport.
+        // Further cycling updates the desired UUID above and is coalesced until the client catches up.
+        if (teleportPending(player)) return;
+        if (player.getCameraEntity() != target) {
+            if (!targetId.equals(spectator.positionedTarget) || player.getEntityWorld() != target.getEntityWorld()
+                    || player.getEntityPos().squaredDistanceTo(target.getEntityPos()) > CAMERA_RELOCATE_DISTANCE_SQUARED) {
+                if (tickCounter < spectator.nextRelocateTick) return;
+                setDeathCamera(player, player);
+                player.setVelocity(Vec3d.ZERO);
+                if (player.teleport(target.getEntityWorld(), target.getX(), target.getY(), target.getZ(),
+                        Set.<PositionFlag>of(), target.getYaw(), target.getPitch(), true)) {
+                    spectator.positionedTarget = targetId;
+                    spectator.attachAfterTick = tickCounter + 2;
+                    spectator.nextRelocateTick = tickCounter + 5;
+                }
+                return;
+            }
+            if (tickCounter < spectator.attachAfterTick || !PlayerLookup.tracking(target).contains(player)) return;
+            setDeathCamera(player, target);
+            spectator.cameraSyncTicks = 5;
+        }
+        // Only resend a camera that is in this world and already being tracked by this client.
+        if (((spectator.cameraSyncTicks > 0 && --spectator.cameraSyncTicks == 0)
+                || tickCounter % DEATH_WAIT_SYNC_INTERVAL_TICKS == 0) && PlayerLookup.tracking(target).contains(player))
+            player.networkHandler.sendPacket(new SetCameraEntityS2CPacket(target));
+    }
+
+    /** Eliminated players can jump to anyone, but neither the camera nor their position keeps following. */
+    private void updateFreeSpectating(GameContext context, ServerPlayerEntity player, DeathSpectator spectator, int direction) {
+        List<ServerPlayerEntity> targets = context.getServer().getPlayerManager().getPlayerList().stream()
+                .filter(target -> target != player && !target.isRemoved() && target.isAlive())
+                .sorted(Comparator.comparing(ServerPlayerEntity::getUuid)).toList();
+        int current = -1;
+        for (int i = 0; i < targets.size(); i++) if (targets.get(i).getUuid().equals(spectator.target)) current = i;
+        if (direction != 0 && !targets.isEmpty()) {
+            current = current < 0 ? (direction < 0 ? targets.size() - 1 : 0) : Math.floorMod(current + direction, targets.size());
+            spectator.target = targets.get(current).getUuid();
+            spectator.jumpPending = true;
+            setDeathCamera(player, player);
+        } else if (current < 0) {
+            spectator.target = null;
+            spectator.jumpPending = false;
+        }
+        boolean countChanged = spectator.targetCount != targets.size();
+        spectator.targetCount = targets.size();
+        if (countChanged || direction != 0 || tickCounter % DEATH_WAIT_SYNC_INTERVAL_TICKS == 0)
+            HunterWildcardPackets.sendDeathSpectate(player, true, "", targets.size());
+        if (!spectator.jumpPending || current < 0 || teleportPending(player) || tickCounter < spectator.nextRelocateTick) return;
+        ServerPlayerEntity target = targets.get(current);
+        setDeathCamera(player, player);
+        player.setVelocity(Vec3d.ZERO);
+        // Leave room behind the player so the free camera does not start inside their head.
+        Vec3d position = target.getEntityPos().subtract(Vec3d.fromPolar(0, target.getYaw()).multiply(1.5)).add(0, 0.5, 0);
+        if (player.teleport(target.getEntityWorld(), position.x, position.y, position.z,
+                Set.<PositionFlag>of(), target.getYaw(), target.getPitch(), true)) {
+            spectator.jumpPending = false;
+            spectator.nextRelocateTick = tickCounter + 5;
+        }
+    }
+
+    private void restoreAnchor(GameContext context, ServerPlayerEntity player, DeathSpectator spectator) {
+        ServerWorld world = context.getServer().getWorld(spectator.world);
+        if (world != null) {
+            player.setVelocity(Vec3d.ZERO);
+            player.teleport(world, spectator.pos.x, spectator.pos.y, spectator.pos.z, Set.<PositionFlag>of(), spectator.yaw, spectator.pitch, true);
+        }
+    }
+
+    private void stopSpectating(GameContext context, ServerPlayerEntity player) {
+        DeathSpectator spectator = spectators.remove(player.getUuid());
+        setDeathCamera(player, player);
+        if (spectator != null) restoreAnchor(context, player, spectator);
+        HunterWildcardPackets.sendDeathSpectate(player, false, "", 0);
     }
 
     public void tick(GameContext context, CompassTracker compassTracker) {
         tickCounter++;
+        // Run the vanilla respawn entry point after death processing has finished, before iterating waiting entries.
+        for (UUID uuid : new ArrayList<>(pendingDeathRespawns)) {
+            pendingDeathRespawns.remove(uuid);
+            ServerPlayerEntity player = context.getServer().getPlayerManager().getPlayer(uuid);
+            if (player != null && player.isDead()) {
+                player.networkHandler.onClientStatus(new ClientStatusC2SPacket(ClientStatusC2SPacket.Mode.PERFORM_RESPAWN));
+            }
+        }
+        for (UUID uuid : new ArrayList<>(pendingRespawnSetup)) {
+            pendingRespawnSetup.remove(uuid);
+            ServerPlayerEntity player = context.getServer().getPlayerManager().getPlayer(uuid);
+            if (player != null && player.isAlive()) finishVanillaRespawn(context, player, compassTracker);
+        }
+        for (var entry : spectators.entrySet()) {
+            ServerPlayerEntity player = context.getServer().getPlayerManager().getPlayer(entry.getKey());
+            if (player != null && player.isAlive()) updateSpectating(context, player, entry.getValue(), 0);
+        }
         Iterator<Map.Entry<UUID, WaitingPlayer>> iterator = waiting.entrySet().iterator();
         while (iterator.hasNext()) {
             Map.Entry<UUID, WaitingPlayer> entry = iterator.next();
@@ -286,7 +482,6 @@ public class RespawnManager {
             wait.remainingTicks--;
             if (wait.remainingTicks > 0) {
                 if (wait.holding && !player.isDead()) {
-                    holdInPlace(context, player, wait);
                     if (wait.remainingTicks % DEATH_WAIT_SYNC_INTERVAL_TICKS == 0) {
                         sendDeathWait(player, wait);
                     }
@@ -295,7 +490,7 @@ public class RespawnManager {
             }
 
             if (player.isDead()) {
-                // Still on the death screen: finishRespawn runs from onAfterRespawn once they click respawn.
+                // If vanilla respawn is delayed, onAfterRespawn completes the expired wait.
                 wait.remainingTicks = 0;
                 continue;
             }
@@ -306,18 +501,21 @@ public class RespawnManager {
     }
 
     private void finishRespawn(GameContext context, ServerPlayerEntity player, WaitingPlayer wait, CompassTracker compassTracker) {
+        stopSpectating(context, player);
         ModConfig config = context.getConfig();
         highlightKiller(context, player);
         ServerWorld deathWorld = context.getServer().getWorld(wait.deathWorld);
         if (config.randomRespawnEnabled && deathWorld != null && !BackroomsDimension.isBackrooms(deathWorld)) {
+            ServerWorld respawnWorld = returnsToOverworld(wait) ? context.getServer().getOverworld() : deathWorld;
+            Vec3d origin = returnsToOverworld(wait) ? player.getEntityPos() : wait.deathPos;
             int minDistance = wait.role == PlayerRole.HUNTER ? config.hunterRespawnDistance : config.runnerRespawnDistance;
             // Runners respawn away from hunters; hunters respawn away from runners so a death is not a free re-engage.
             List<ServerPlayerEntity> avoid = wait.role == PlayerRole.RUNNER ? context.getHunters() : context.getRunners();
             double clearance = wait.role == PlayerRole.RUNNER ? config.runnerRespawnDistance : config.hunterRespawnRunnerClearance;
-            BlockPos spot = RespawnSpotFinder.find(deathWorld, wait.deathPos, minDistance, minDistance * 2, avoid, clearance, context.getRandom());
+            BlockPos spot = RespawnSpotFinder.find(respawnWorld, origin, minDistance, minDistance * 2, avoid, clearance, context.getRandom());
             if (spot != null) {
                 player.setVelocity(Vec3d.ZERO);
-                player.teleport(deathWorld, spot.getX() + 0.5D, spot.getY(), spot.getZ() + 0.5D, Set.<PositionFlag>of(), player.getYaw(), player.getPitch(), true);
+                player.teleport(respawnWorld, spot.getX() + 0.5D, spot.getY(), spot.getZ() + 0.5D, Set.<PositionFlag>of(), player.getYaw(), player.getPitch(), true);
             }
         }
 
@@ -346,6 +544,9 @@ public class RespawnManager {
 
     public void remove(ServerPlayerEntity player) {
         UUID uuid = player.getUuid();
+        spectators.remove(uuid);
+        pendingDeathRespawns.remove(uuid);
+        pendingRespawnSetup.remove(uuid);
         waiting.remove(uuid);
         remainingLives.remove(uuid);
         outPlayers.remove(uuid);
@@ -362,11 +563,17 @@ public class RespawnManager {
         return wait != null && wait.remainingTicks > 0 && !outPlayers.contains(player.getUuid());
     }
 
+    public int livesFor(ServerPlayerEntity player) { int n = remainingLives.getOrDefault(player.getUuid(), -1); return n == Integer.MAX_VALUE ? -1 : n; }
+    public int waitSeconds(ServerPlayerEntity player) { WaitingPlayer w = waiting.get(player.getUuid()); return w == null ? 0 : Math.max(0, (w.remainingTicks + 19) / 20); }
+
     public int getRunnerKillCount() {
         return runnerKillCount;
     }
 
     public void clear() {
+        spectators.clear();
+        pendingDeathRespawns.clear();
+        pendingRespawnSetup.clear();
         waiting.clear();
         remainingLives.clear();
         outPlayers.clear();
@@ -386,6 +593,7 @@ public class RespawnManager {
         for (UUID uuid : affectedPlayers) {
             ServerPlayerEntity player = context.getServer().getPlayerManager().getPlayer(uuid);
             if (player != null) {
+                stopSpectating(context, player);
                 HunterWildcardPackets.sendDeathWait(player, false, 0, "", "");
                 if (!player.isDead()) {
                     player.changeGameMode(GameMode.SURVIVAL);
@@ -579,6 +787,23 @@ public class RespawnManager {
             this.deathWorld = deathWorld;
             this.deathPos = deathPos;
             this.remainingTicks = remainingTicks;
+        }
+    }
+
+    private static final class DeathSpectator {
+        final PlayerRole role;
+        final RegistryKey<World> world;
+        final Vec3d pos;
+        final float yaw, pitch;
+        UUID target;
+        int targetCount = -1;
+        int cameraSyncTicks;
+        UUID positionedTarget;
+        int attachAfterTick, nextRelocateTick;
+        boolean jumpPending;
+
+        DeathSpectator(PlayerRole role, RegistryKey<World> world, Vec3d pos, float yaw, float pitch) {
+            this.role = role; this.world = world; this.pos = pos; this.yaw = yaw; this.pitch = pitch;
         }
     }
 

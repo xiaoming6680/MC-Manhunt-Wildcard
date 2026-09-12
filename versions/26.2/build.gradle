@@ -1,0 +1,78 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.17.20'
+}
+
+def rootProperties = new Properties()
+file('../../gradle.properties').withInputStream { rootProperties.load(it) }
+version = rootProperties.mod_version
+group = rootProperties.maven_group
+base { archivesName = "${rootProperties.archives_base_name}-${minecraft_version}" }
+def apiVersions = ['26.2': '0.160.0+26.2']
+if (!apiVersions.containsKey(minecraft_version)) throw new GradleException("Unsupported target: ${minecraft_version}")
+repositories { mavenCentral() }
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${apiVersions[minecraft_version]}"
+}
+sourceSets.main.resources.setSrcDirs(['../26.1/src/main/resources', '../../src/main/resources'])
+processResources {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    inputs.property 'version', project.version
+    inputs.property 'minecraftVersion', minecraft_version
+    filesMatching('fabric.mod.json') {
+        expand version: project.version
+        filter { line -> line.replace('"minecraft": "1.21.11"', '"minecraft": "' + minecraft_version + '"').replace('"java": ">=21"', '"java": ">=25"') }
+    }
+    filesMatching('hunterwildcard.mixins.json') {
+        filter { line -> line.replace('JAVA_21', 'JAVA_25').replace('"TiltGeometryMixin",', '"TiltGeometryMixin", "TiltFluidEyesMixin",') }
+    }
+}
+tasks.withType(JavaCompile).configureEach { options.release = 25; options.encoding = 'UTF-8'; options.compilerArgs += ['-Xmaxerrs', '500'] }
+java { sourceCompatibility = JavaVersion.VERSION_25; targetCompatibility = JavaVersion.VERSION_25; withSourcesJar() }
+tasks.named('sourcesJar') { duplicatesStrategy = DuplicatesStrategy.EXCLUDE }
+jar { from('../../LICENSE') { rename { "${it}_${rootProperties.archives_base_name}" } } }
+
+// Small API renames are applied at build time; gameplay-specific changes live in src/.
+def adaptSource = { String line ->
+    line.replace('.setScreen(', '.gui.setScreen(')
+        .replaceAll(/(?<![\w.])client\.screen\b/, 'client.gui.screen()')
+        .replaceAll(/(?<![\w.])minecraft\.screen\b/, 'minecraft.gui.screen()')
+        .replaceAll(/(?<![\w.])c\.screen\b/, 'c.gui.screen()')
+        .replace('Minecraft.getInstance().screen', 'Minecraft.getInstance().gui.screen()')
+        .replace('.options.hideGui', '.gui.hud.isHidden()')
+        .replace('.gui.getChat()', '.gui.hud.getChat()')
+        .replace('.getOverlay()', '.gui.overlay()')
+        .replace('.getToastManager()', '.gui.toastManager()')
+        .replace('.getClientLevel().waitForChunksRender()', '.getConnection().waitForChunksRender()')
+        .replace('EntityType.BLAZE', 'net.minecraft.world.entity.EntityTypes.BLAZE')
+        .replace('Items.YELLOW_WOOL', 'net.minecraft.core.registries.BuiltInRegistries.ITEM.getValue(net.minecraft.resources.Identifier.withDefaultNamespace("yellow_wool"))')
+        .replace('team.setColor(color)', 'team.setColor(java.util.Optional.of(net.minecraft.world.scores.TeamColor.valueOf(color.name())))')
+}
+def generatedMain = tasks.register('prepareVersionSources', Sync) {
+    inputs.file 'build.gradle'
+    from('../26.1/src/main/java') { exclude 'com/xiaoming/hunterwildcard/mixin/TiltGeometryMixin.java' }
+    from('src/main/java')
+    into layout.buildDirectory.dir('generated/sources/main')
+    filter { String line -> adaptSource(line) }
+}
+sourceSets.main.java.setSrcDirs([generatedMain])
+
+fabricApi {
+    configureTests {
+        createSourceSet = true
+        modId = 'hunterwildcard-test'
+        enableGameTests = false
+        enableClientGameTests = true
+        eula = true
+        clearRunDirectory = true
+    }
+}
+def generatedTests = tasks.register('prepareVersionTests', Sync) {
+    inputs.file 'build.gradle'
+    from('../26.1/src/gametest/java')
+    into layout.buildDirectory.dir('generated/sources/gametest')
+    filter { String line -> adaptSource(line) }
+}
+sourceSets.gametest.java.setSrcDirs([generatedTests])
+sourceSets.gametest.resources.srcDir '../../src/gametest/resources'

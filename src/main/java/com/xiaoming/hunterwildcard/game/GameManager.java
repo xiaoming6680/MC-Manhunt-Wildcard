@@ -100,6 +100,27 @@ public class GameManager {
     private GameManager() {
     }
 
+    private String lastWinner = "", lastReason = "";
+    private List<HunterWildcardPackets.MemberEntry> lastMembers = List.of();
+    private List<HunterWildcardPackets.MemberEntry> roster(ServerPlayerEntity viewer) {
+        List<HunterWildcardPackets.MemberEntry> list = new java.util.ArrayList<>();
+        MinecraftServer rosterServer = viewer == null ? server : viewer.getEntityWorld().getServer();
+        if (rosterServer == null) return list;
+        for (ServerPlayerEntity p : teamManager.getParticipants(rosterServer)) {
+            PlayerRole role = teamManager.getRole(p);
+            boolean reveal = viewer == null || p == viewer || teamManager.getRole(viewer) == role || state == GameState.WAITING || state == GameState.ENDING;
+            String status = !reveal ? "ui.member.hidden" : state == GameState.WAITING ? "state.waiting" : respawnManager.isOut(p) ? "ui.member.out" : respawnManager.isWaitingForRespawn(p) ? "ui.member.respawning" : "ui.member.alive";
+            list.add(new HunterWildcardPackets.MemberEntry(PlayerUtil.displayNameSpec(p), role.getTranslationKey(), HunterWildcardText.key(status), reveal ? respawnManager.livesFor(p) : -2, reveal ? respawnManager.waitSeconds(p) : 0));
+        }
+        return List.copyOf(list);
+    }
+    public HunterWildcardPackets.RoundDetailsPayload roundDetails(ServerPlayerEntity viewer, String objective, String hunterObjective) {
+        String own = teamManager.getRole(viewer)==null ? "ui.member.spectator" : respawnManager.isOut(viewer) ? "ui.member.out" : respawnManager.isWaitingForRespawn(viewer) ? "ui.member.respawning" : "ui.member.alive";
+        boolean anonymous = com.xiaoming.hunterwildcard.wildcard.rules.WhoAreYouRule.isActive();
+        return new HunterWildcardPackets.RoundDetailsPayload(roster(viewer), anonymous ? "" : lastWinner, anonymous ? "" : lastReason,
+                anonymous ? List.of() : lastMembers, objective, hunterObjective, HunterWildcardText.key(own), teamManager.getRole(viewer)==null ? -2 : respawnManager.livesFor(viewer));
+    }
+
     public static GameManager getInstance() {
         return INSTANCE;
     }
@@ -170,7 +191,9 @@ public class GameManager {
             wildcardTestPlayerUuid = null;
         }
         clearLobbyGlow(server);
+        lastWinner = lastReason = ""; lastMembers = List.of();
         state = GameState.PREPARING;
+        resetAdvancements(server);
         preparingTicks = config.getPreparingTicks();
         endingTicks = 0;
         actionBarTicks = 0;
@@ -189,6 +212,22 @@ public class GameManager {
         HunterWildcardPackets.clearChat(server);
         messageManager.broadcast(server, HunterWildcardText.translatable("msg.game.preparing_started", config.preparingSeconds));
         source.sendFeedback(() -> HunterWildcardText.translatable("command.start.preparing"), true);
+    }
+
+    private void resetAdvancements(MinecraftServer targetServer) {
+        // Include spectators and unfinished criteria, not just completed advancements or team members.
+        for (ServerPlayerEntity player : targetServer.getPlayerManager().getPlayerList()) {
+            var tracker = player.getAdvancementTracker();
+            for (var advancement : targetServer.getAdvancementLoader().getAdvancements()) {
+                List<String> obtained = new ArrayList<>();
+                tracker.getProgress(advancement).getObtainedCriteria().forEach(obtained::add);
+                for (String criterion : obtained) {
+                    tracker.revokeCriterion(advancement, criterion);
+                }
+            }
+            tracker.sendUpdate(player, false);
+            tracker.save();
+        }
     }
 
     public void stop(ServerCommandSource source) {
@@ -399,6 +438,14 @@ public class GameManager {
         }
     }
 
+    public void beforeDeathSpectatorTick(ServerPlayerEntity player) {
+        respawnManager.beforeSpectatorTick(player);
+    }
+
+    public void beforeDeathTargetTeleport(ServerPlayerEntity target) {
+        respawnManager.beforeTargetTeleport(target);
+    }
+
     private void tick(MinecraftServer tickServer) {
         if (state == GameState.WAITING && wildcardManager.hasRuleInProgress()) {
             server = tickServer;
@@ -562,6 +609,10 @@ public class GameManager {
         respawnManager.onAfterRespawn(context(), player, compassTracker);
     }
 
+    public void cycleDeathSpectate(ServerPlayerEntity player, boolean previous) {
+        if (state == GameState.RUNNING) respawnManager.cycleSpectating(context(), player, previous);
+    }
+
     public void handlePlayerAttack(ServerPlayerEntity player, Entity target) {
         GameContext eventContext = wildcardEventContext(player);
         if (eventContext != null) {
@@ -704,7 +755,8 @@ public class GameManager {
             return true;
         }
 
-        if (state != GameState.RUNNING) {
+        // keepInventory is already taken over when the preparation countdown starts.
+        if (state != GameState.PREPARING && state != GameState.RUNNING) {
             return false;
         }
 
@@ -791,6 +843,7 @@ public class GameManager {
     }
 
     private void handleServerStopping(MinecraftServer stoppingServer) {
+        lastWinner = lastReason = ""; lastMembers = List.of();
         cleanupAndReset(stoppingServer);
         BackroomsSession.returnEveryone(stoppingServer);
     }
@@ -823,6 +876,9 @@ public class GameManager {
         endingTicks = config.getEndingTicks();
         GameContext endingContext = context();
         WinningSide winningSide = classifyWinner(reason);
+        lastWinner = HunterWildcardText.key(winningSide == WinningSide.RUNNERS ? "team.runners" : winningSide == WinningSide.HUNTERS ? "team.hunters" : "common.none");
+        lastReason = reason;
+        lastMembers = roster(null);
         HunterWildcardPackets.clearChat(server);
         sendEndingFeedback(reason, winningSide);
         sendEndingSummary(endingContext, reason, winningSide);

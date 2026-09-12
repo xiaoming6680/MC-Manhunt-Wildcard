@@ -37,6 +37,8 @@ public class CompassTargetScreen extends Screen {
     private int panelY;
     private int panelHeight;
     private int scrollRows;
+    private int visibleRows;
+    private int selectedRow;
     private String hoverTooltip = "";
     private int hoverTooltipX;
     private int hoverTooltipY;
@@ -44,6 +46,7 @@ public class CompassTargetScreen extends Screen {
     private CompassTargetScreen(CompassMenuPayload payload) {
         super(Text.translatable(HunterWildcardText.key("screen.compass.title")));
         this.payload = payload;
+        if (!payload.nearestSelected()) for(int i=0;i<payload.entries().size();i++) if(payload.entries().get(i).selected()) selectedRow=i+1;
     }
 
     public static void open(CompassMenuPayload payload) {
@@ -53,7 +56,7 @@ public class CompassTargetScreen extends Screen {
     @Override
     protected void init() {
         List<Row> rows = rows();
-        int visibleRows = Math.min(rows.size(), MAX_VISIBLE_BUTTONS);
+        visibleRows = Math.min(rows.size(), Math.max(1, Math.min(MAX_VISIBLE_BUTTONS, (height - 76) / (BUTTON_HEIGHT + BUTTON_GAP))));
         int contentHeight = visibleRows * BUTTON_HEIGHT + Math.max(0, visibleRows - 1) * BUTTON_GAP;
         panelHeight = PANEL_PADDING + TITLE_HEIGHT + contentHeight + 14 + PANEL_PADDING;
         int panelWidth = Math.min(PANEL_WIDTH, Math.max(160, width - 16));
@@ -85,7 +88,7 @@ public class CompassTargetScreen extends Screen {
             String label = entry.sameDimension()
                     ? tr(HunterWildcardText.spec("screen.compass.entry_distance", name, entry.distance()))
                     : tr(HunterWildcardText.spec("screen.compass.entry_other_dimension", name));
-            rows.add(new Row(label, "", entry.selected() && !payload.nearestSelected(), CompassSelectPayload.track(entry.playerId())));
+            rows.add(new Row(label, label, entry.selected() && !payload.nearestSelected(), CompassSelectPayload.track(entry.playerId())));
         }
         return rows;
     }
@@ -117,6 +120,12 @@ public class CompassTargetScreen extends Screen {
         String hint = textRenderer.trimToWidth(tr(HunterWildcardText.key("screen.compass.hint")), panelWidth - PANEL_PADDING * 2);
         context.drawText(textRenderer, Text.literal(hint), panelX + PANEL_PADDING, panelY + panelHeight - PANEL_PADDING - 8, COLOR_HINT, false);
 
+        if (rows().size() > visibleRows) {
+            int trackHeight = Math.max(20, panelHeight - 60);
+            int thumb = Math.max(8, trackHeight * visibleRows / rows().size());
+            int sy = panelY + 34 + (trackHeight - thumb) * scrollRows / Math.max(1, rows().size() - visibleRows);
+            context.fill(panelX + panelWidth - 5, sy, panelX + panelWidth - 3, sy + thumb, COLOR_ACCENT);
+        }
         hoverTooltip = "";
         super.render(context, mouseX, mouseY, delta);
         if (!hoverTooltip.isBlank()) {
@@ -127,15 +136,32 @@ public class CompassTargetScreen extends Screen {
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
         int rows = rows().size();
-        if (rows <= MAX_VISIBLE_BUTTONS) {
+        if (rows <= visibleRows) {
             return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
         }
-        int next = Math.max(0, Math.min(rows - MAX_VISIBLE_BUTTONS, scrollRows - (verticalAmount > 0 ? 1 : -1)));
+        int next = Math.max(0, Math.min(rows - visibleRows, scrollRows - (verticalAmount > 0 ? 1 : -1)));
         if (next != scrollRows) {
             scrollRows = next;
             clearAndInit();
         }
         return true;
+    }
+
+    @Override
+    public boolean keyPressed(net.minecraft.client.input.KeyInput input) {
+        int key = input.key();
+        int focusedIndex=children().indexOf(getFocused());
+        if(focusedIndex>=0)selectedRow=scrollRows+focusedIndex;
+        if (key == 264 || key == 265) {
+            selectedRow = Math.floorMod(selectedRow + (key == 264 ? 1 : -1), rows().size());
+            scrollRows = Math.max(0, Math.min(scrollRows, selectedRow));
+            if (selectedRow >= scrollRows + visibleRows) scrollRows = selectedRow - visibleRows + 1;
+            clearAndInit();
+            if (selectedRow - scrollRows < children().size()) setFocused(children().get(selectedRow - scrollRows));
+            return true;
+        }
+        if ((key == 257 || key == 335) && getFocused()==null) { select(rows().get(selectedRow).payload()); return true; }
+        return super.keyPressed(input);
     }
 
     @Override
@@ -162,7 +188,7 @@ public class CompassTargetScreen extends Screen {
 
         @Override
         protected void drawIcon(DrawContext context, int mouseX, int mouseY, float delta) {
-            boolean hovered = isHovered();
+            boolean hovered = isHovered() || isFocused();
             int background = selected ? 0xAA345B78 : hovered ? 0xAA3E5570 : 0x88303A46;
             int border = selected ? COLOR_ACCENT : hovered ? 0xFF74B6FF : 0xFF4C5A66;
             int x = getX();

@@ -70,7 +70,7 @@ public class PortalRule implements WildcardRule {
         }
 
         for (ServerPlayerEntity player : context.getParticipants()) {
-            if (!player.isAlive()) {
+            if (!player.isAlive() || player.isSpectator()) {
                 continue;
             }
             PortalGroup used = null;
@@ -154,7 +154,7 @@ public class PortalRule implements WildcardRule {
         Random random = context.getRandom();
         Map<RegistryKey<World>, List<ServerPlayerEntity>> byWorld = new LinkedHashMap<>();
         for (ServerPlayerEntity player : context.getParticipants()) {
-            if (player.isAlive()) {
+            if (player.isAlive() && !player.isSpectator()) {
                 byWorld.computeIfAbsent(player.getEntityWorld().getRegistryKey(), ignored -> new ArrayList<>()).add(player);
             }
         }
@@ -222,15 +222,34 @@ public class PortalRule implements WildcardRule {
                     continue;
                 }
                 BlockPos feet = start.up(sign * offset);
-                if (world.getBlockState(feet).getCollisionShape(world, feet).isEmpty()
-                        && world.getBlockState(feet.up()).getCollisionShape(world, feet.up()).isEmpty()
-                        && !world.getBlockState(feet.down()).getCollisionShape(world, feet.down()).isEmpty()) {
+                if (isSafeStanding(world, feet)) {
                     return feet;
                 }
             }
         }
+        // A ceiling world's heightmap points above its bedrock roof, not to a walkable cave.
+        if (world.getDimension().hasCeiling()) return null;
         BlockPos top = world.getTopPosition(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, start);
-        return world.getBlockState(top.down()).getCollisionShape(world, top.down()).isEmpty() ? null : top;
+        return isSafeStanding(world, top) ? top : null;
+    }
+
+    private static boolean isSafeStanding(ServerWorld world, BlockPos feet) {
+        if (!world.getWorldBorder().contains(feet) || feet.getY() <= world.getBottomY()
+                || feet.getY() + 1 >= world.getBottomY() + world.getHeight()) return false;
+        if (world.getDimension().hasCeiling()
+                && feet.getY() > world.getBottomY() + world.getDimension().logicalHeight() - 8) return false;
+        var ground = world.getBlockState(feet.down());
+        if (!ground.isSolidBlock(world, feet.down()) || !world.getFluidState(feet.down()).isEmpty()
+                || ground.isOf(Blocks.MAGMA_BLOCK) || ground.isOf(Blocks.CACTUS)) return false;
+        for (BlockPos pos : List.of(feet, feet.up())) {
+            var state = world.getBlockState(pos);
+            if (!state.getCollisionShape(world, pos).isEmpty() || !world.getFluidState(pos).isEmpty()
+                    || state.isOf(Blocks.FIRE) || state.isOf(Blocks.SOUL_FIRE) || state.isOf(Blocks.POWDER_SNOW)
+                    || state.isOf(Blocks.WITHER_ROSE) || state.isOf(Blocks.SWEET_BERRY_BUSH)
+                    || state.isOf(Blocks.NETHER_PORTAL) || state.isOf(Blocks.END_PORTAL)
+                    || (state.isOf(Blocks.END_GATEWAY) && !isManagedGateway(world, pos))) return false;
+        }
+        return true;
     }
 
     private void travel(GameContext context, ServerPlayerEntity player, PortalGroup group, Portal entered) {
@@ -245,11 +264,18 @@ public class PortalRule implements WildcardRule {
             return;
         }
 
+        // Terrain can change after the portals were created. Never send someone to a now-unsafe exit.
+        if (!isSafeStanding(world, BlockPos.ofFloored(exit.center()))) {
+            player.sendMessage(HunterWildcardText.translatable("msg.wildcard.portal.unsafe").formatted(Formatting.YELLOW), true);
+            return;
+        }
+
         Vec3d from = player.getEntityPos();
         ServerWorld fromWorld = player.getEntityWorld() instanceof ServerWorld current ? current : world;
         fromWorld.playSound(null, from.x, from.y, from.z, SoundEvents.BLOCK_PORTAL_TRAVEL, SoundCategory.PLAYERS, 0.4F, 1.4F);
         fromWorld.spawnParticles(ParticleTypes.REVERSE_PORTAL, from.x, from.y + 1.0, from.z, 60, 0.4, 0.8, 0.4, 0.4);
 
+        player.setVelocity(Vec3d.ZERO);
         player.teleport(world, exit.center().x, exit.center().y, exit.center().z, Set.of(), player.getYaw(), player.getPitch(), false);
         player.fallDistance = 0.0F;
         world.spawnParticles(ParticleTypes.PORTAL, exit.center().x, exit.center().y + 1.0, exit.center().z, 60, 0.4, 0.8, 0.4, 0.4);

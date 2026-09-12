@@ -1,0 +1,46 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.17.20'
+}
+
+def rootProperties = new Properties()
+file('../../gradle.properties').withInputStream { rootProperties.load(it) }
+version = rootProperties.mod_version
+group = rootProperties.maven_group
+base { archivesName = "${rootProperties.archives_base_name}-${minecraft_version}" }
+def apiVersions = ['26.1': '0.145.1+26.1', '26.1.1': '0.145.4+26.1.1', '26.1.2': '0.155.3+26.1.2']
+if (!apiVersions.containsKey(minecraft_version)) throw new GradleException("Unsupported target: ${minecraft_version}")
+repositories { mavenCentral() }
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${apiVersions[minecraft_version]}"
+}
+sourceSets.main.resources.srcDir '../../src/main/resources'
+processResources {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    inputs.property 'version', project.version
+    inputs.property 'minecraftVersion', minecraft_version
+    filesMatching('fabric.mod.json') {
+        expand version: project.version
+        filter { line -> line.replace('"minecraft": "1.21.11"', '"minecraft": "' + minecraft_version + '"').replace('"java": ">=21"', '"java": ">=25"') }
+    }
+    filesMatching('hunterwildcard.mixins.json') {
+        filter { line -> line.replace('JAVA_21', 'JAVA_25').replace('"TiltGeometryMixin",', '"TiltGeometryMixin", "TiltFluidEyesMixin",') }
+    }
+}
+tasks.withType(JavaCompile).configureEach { options.release = 25; options.encoding = 'UTF-8'; options.compilerArgs += ['-Xmaxerrs', '500'] }
+java { sourceCompatibility = JavaVersion.VERSION_25; targetCompatibility = JavaVersion.VERSION_25; withSourcesJar() }
+tasks.named('sourcesJar') { duplicatesStrategy = DuplicatesStrategy.EXCLUDE }
+jar { from('../../LICENSE') { rename { "${it}_${rootProperties.archives_base_name}" } } }
+
+fabricApi {
+    configureTests {
+        createSourceSet = true
+        modId = 'hunterwildcard-test'
+        enableGameTests = false
+        enableClientGameTests = true
+        eula = true
+        clearRunDirectory = true
+    }
+}
+sourceSets.gametest.resources.srcDir '../../src/gametest/resources'

@@ -33,6 +33,7 @@ public final class BackroomsClient {
     private static final int LOCKED_VIEW_DISTANCE = 6;
 
     private static int holdTicks;
+    private static int coveredTicks;
     private static int sinkAge = -1;
     private static int arrivalAge = -1;
     private static boolean wasInBackrooms;
@@ -43,12 +44,15 @@ public final class BackroomsClient {
     private BackroomsClient() {
     }
 
+    public static boolean isCoverVisible(){return holdTicks>0;}
+
     public static void register() {
         ClientTickEvents.END_CLIENT_TICK.register(BackroomsClient::tick);
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> reset(client));
         HudElementRegistry.addLast(Identifier.of(HunterWildcardMod.MOD_ID, "backrooms_cover"), (context, tickCounter) -> {
-            if (holdTicks > 0) {
+            if (holdTicks > 0 && !com.xiaoming.hunterwildcard.client.hud.DeathWaitOverlay.isVisible()) {
                 context.fill(0, 0, context.getScaledWindowWidth(), context.getScaledWindowHeight(), 0xFF000000);
+                if (coveredTicks >= 60) context.drawCenteredTextWithShadow(MinecraftClient.getInstance().textRenderer, net.minecraft.text.Text.translatable("hunterwildcard.ui.backrooms.transition"), context.getScaledWindowWidth()/2, context.getScaledWindowHeight()/2, 0xFFA6B1BD);
             }
         });
     }
@@ -90,6 +94,7 @@ public final class BackroomsClient {
     private static void tick(MinecraftClient client) {
         // The cover's clock stops while a loading screen is up, so it measures black the player sees.
         boolean loading = client.currentScreen instanceof LevelLoadingScreen;
+        coveredTicks = holdTicks > 0 ? coveredTicks + 1 : 0;
         if (!loading && holdTicks > 0) {
             holdTicks--;
         }
@@ -129,6 +134,7 @@ public final class BackroomsClient {
 
     private static void reset(MinecraftClient client) {
         ticksInBackrooms = 0;
+        coveredTicks = 0;
         holdTicks = 0;
         sinkAge = -1;
         arrivalAge = -1;

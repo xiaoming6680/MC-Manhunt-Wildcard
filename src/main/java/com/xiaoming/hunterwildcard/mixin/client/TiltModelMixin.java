@@ -1,6 +1,5 @@
 package com.xiaoming.hunterwildcard.mixin.client;
 
-import com.xiaoming.hunterwildcard.client.WorldTiltClient;
 import net.minecraft.client.render.entity.LivingEntityRenderer;
 import net.minecraft.client.render.entity.state.LivingEntityRenderState;
 import net.minecraft.client.render.entity.state.PlayerEntityRenderState;
@@ -11,20 +10,22 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Player models stand along the tilted gravity while World Tilt is active. Every participant is tilted at the
- * same time, so the local frame is a fair approximation for everyone; the model pivots around the hitbox
- * centre so it stays roughly where the collision box is.
+ * Each player's replicated gravity rotates their model around the same feet origin as their collision box.
  */
 @Mixin(LivingEntityRenderer.class)
 public abstract class TiltModelMixin {
     @Inject(method = "setupTransforms", at = @At("HEAD"))
     private void hunterwildcard$tiltPlayerModel(LivingEntityRenderState state, MatrixStack matrices, float bodyYaw, float scale, CallbackInfo ci) {
-        if (!(state instanceof PlayerEntityRenderState) || !WorldTiltClient.isFrameActive()) {
-            return;
-        }
-        float pivot = state.height / 2.0F;
-        matrices.translate(0.0F, pivot, 0.0F);
-        matrices.multiply(WorldTiltClient.frame());
-        matrices.translate(0.0F, -pivot, 0.0F);
+        var world=net.minecraft.client.MinecraftClient.getInstance().world;
+        if(world==null||!(state instanceof PlayerEntityRenderState player))return;
+        var entity=world.getEntityById(player.id);
+        if(entity==null||!com.xiaoming.hunterwildcard.wildcard.rules.TiltFrame.active(entity))return;
+        matrices.multiply(com.xiaoming.hunterwildcard.wildcard.rules.TiltFrame.rotation(entity));
+    }
+    @Inject(method="updateRenderState(Lnet/minecraft/entity/LivingEntity;Lnet/minecraft/client/render/entity/state/LivingEntityRenderState;F)V",at=@At("TAIL"))
+    private void hunterwildcard$localPose(net.minecraft.entity.LivingEntity entity,LivingEntityRenderState state,float tick,CallbackInfo ci) {
+        if(!com.xiaoming.hunterwildcard.wildcard.rules.TiltFrame.active(entity))return;
+        float[] angles=com.xiaoming.hunterwildcard.wildcard.rules.TiltFrame.localAngles(entity);
+        state.bodyYaw=angles[0];state.relativeHeadYaw=0;state.pitch=angles[1];
     }
 }

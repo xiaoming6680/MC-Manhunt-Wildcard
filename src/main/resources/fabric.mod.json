@@ -8,7 +8,11 @@
   "authors": [
     "XM6680"
   ],
-  "contact": {},
+  "contact": {
+    "homepage": "https://modrinth.com/mod/manhunt-wildcard",
+    "sources": "https://github.com/xiaoming6680/MC-Manhunt-Wildcard",
+    "issues": "https://github.com/xiaoming6680/MC-Manhunt-Wildcard/issues"
+  },
   "license": "MIT",
   "environment": "*",
   "entrypoints": {

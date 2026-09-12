@@ -1,6 +1,7 @@
 package com.xiaoming.hunterwildcard.client.hud;
 
 import com.xiaoming.hunterwildcard.HunterWildcardMod;
+import com.xiaoming.hunterwildcard.client.ui.DisplayPreferences;
 import com.xiaoming.hunterwildcard.client.HunterWildcardClientText;
 import com.xiaoming.hunterwildcard.client.key.KeyScrambleController;
 import com.xiaoming.hunterwildcard.util.HunterWildcardText;
@@ -38,7 +39,6 @@ public class WildcardDrawOverlay {
     private static final long OBJECTIVE_NOTICE_HOLD_MS = 2300L;
     private static final long OBJECTIVE_NOTICE_OUT_MS = 420L;
     private static final long OBJECTIVE_NOTICE_TOTAL_MS = OBJECTIVE_NOTICE_IN_MS + OBJECTIVE_NOTICE_HOLD_MS + OBJECTIVE_NOTICE_OUT_MS;
-    private static final float OBJECTIVE_PANEL_SCALE = 0.8F;
     private static final String[] SPIN_NAMES = WildcardIds.ALL.toArray(new String[0]);
     private static final int KEY_PANEL_WIDTH = 146;
     private static final int KEY_PANEL_ROW_HEIGHT = 11;
@@ -57,7 +57,6 @@ public class WildcardDrawOverlay {
     private static boolean weaponOverheatVisible;
     private static int weaponOverheatHeat;
     private static int weaponOverheatMaxHeat = 1;
-    private static final List<FeedbackEntry> feedbackEntries = new ArrayList<>();
     private static final long KILL_FLASH_MS = 450L;
     private static final float KILL_PANEL_SCALE = 1.0F;
     private static long killFlashStartMs = -1L;
@@ -88,39 +87,14 @@ public class WildcardDrawOverlay {
         MinecraftClient.getInstance().getSoundManager().play(PositionedSoundInstance.ui(SoundEvents.UI_BUTTON_CLICK, 1.2F));
     }
 
-    public static void showKillFeedback(String hunterName, String runnerName, int remainingKills, int currentKills, int targetKills) {
-        String hunter = hunterName == null || hunterName.isBlank() ? tr(HunterWildcardText.key("role.hunter")) : tr(hunterName);
-        String runner = runnerName == null || runnerName.isBlank() ? tr(HunterWildcardText.key("role.runner")) : tr(runnerName);
-        int remaining = Math.max(0, remainingKills);
-        int current = Math.max(0, currentKills);
-        int target = Math.max(1, targetKills);
-        String status = remaining <= 0
-                ? HunterWildcardText.spec("hud.feedback.kill_target.complete")
-                : HunterWildcardText.spec("hud.feedback.kill_target.remaining", remaining, current, target);
-        boolean environment = hunterName != null && hunterName.equals(HunterWildcardText.key("common.environment"));
-        String title = environment ? HunterWildcardText.spec("hud.feedback.env_kill.title") : HunterWildcardText.spec("hud.feedback.kill.title");
-        showFeedback(title, hunter + " -> " + runner, status, "kill");
+    public static void showKillFeedback(String hunterName,String runnerName,int remaining,int current,int target){
+        CombatFeed.kill(hunterName,runnerName,current,target,HunterWildcardText.key("common.environment").equals(hunterName));
     }
-
-    public static void showFeedback(String title, String line1, String line2, String style) {
-        String resolvedStyle = style == null || style.isBlank() ? "neutral" : style;
-        feedbackEntries.add(new FeedbackEntry(
-                title == null || title.isBlank() ? HunterWildcardText.spec("hud.feedback.default_title") : title,
-                line1 == null ? "" : line1,
-                line2 == null ? "" : line2,
-                resolvedStyle,
-                System.currentTimeMillis()
-        ));
-
-        var soundManager = MinecraftClient.getInstance().getSoundManager();
-        if (resolvedStyle.equals("kill")) {
-            // A kill should land: the arrow "ding" plus a low thud, and a red flash drawn by the panel.
-            soundManager.play(PositionedSoundInstance.ui(SoundEvents.ENTITY_ARROW_HIT_PLAYER, 1.0F));
-            soundManager.play(PositionedSoundInstance.ui(SoundEvents.ENTITY_GENERIC_EXPLODE.value(), 0.6F));
-            killFlashStartMs = System.currentTimeMillis();
-        } else {
-            soundManager.play(PositionedSoundInstance.ui(SoundEvents.BLOCK_NOTE_BLOCK_PLING, 1.15F));
-        }
+    public static void showFeedback(String title,String line1,String line2,String style){CombatFeed.notice(title,line1,line2,style);}
+    public static void reset(){
+        drawStartTimeMs=-1; introVisible=false; introHiding=false; introName=""; introDescription="";
+        objectiveVisible=false; objectiveHiding=false;objectiveText="";objectiveHunterText="";weaponOverheatVisible=false;
+        objectiveNoticeEntries.clear();CombatFeed.clear();introPanelBottom=0;
     }
 
     public static void setObjectiveStatus(boolean visible, String text, String style, String hunterText) {
@@ -145,22 +119,12 @@ public class WildcardDrawOverlay {
     }
 
     public static void showObjectiveNotice(String message, String style) {
-        String safeMessage = message == null ? "" : message;
-        if (safeMessage.isBlank()) {
-            return;
-        }
-
-        objectiveNoticeEntries.add(new ObjectiveNoticeEntry(
-                safeMessage,
-                style == null || style.isBlank() ? "coordinate" : style,
-                System.currentTimeMillis()
-        ));
-
-        MinecraftClient.getInstance().getSoundManager().play(PositionedSoundInstance.ui(SoundEvents.BLOCK_NOTE_BLOCK_PLING, 1.05F));
+        if(message!=null && !message.isBlank()) CombatFeed.notice(HunterWildcardText.key("hud.objective.notice_title"),message,"",style);
     }
 
     public static void setIntro(boolean visible, String wildcardName, String description) {
         if (visible) {
+            if(introVisible && !introHiding && java.util.Objects.equals(introName,wildcardName) && java.util.Objects.equals(introDescription,description))return;
             introVisible = true;
             introHiding = false;
             introTransitionStartTimeMs = System.currentTimeMillis();
@@ -169,7 +133,7 @@ public class WildcardDrawOverlay {
             return;
         }
 
-        if (introVisible) {
+        if (introVisible && !introHiding) {
             introHiding = true;
             introTransitionStartTimeMs = System.currentTimeMillis();
         }
@@ -182,18 +146,24 @@ public class WildcardDrawOverlay {
     }
 
     private static void render(DrawContext context, RenderTickCounter tickCounter) {
+        if (MinecraftClient.getInstance().player == null || MinecraftClient.getInstance().options.hudHidden || DeathWaitOverlay.isVisible() || com.xiaoming.hunterwildcard.client.BackroomsClient.isCoverVisible()) return;
+        context.getMatrices().pushMatrix();
+        context.getMatrices().scale(HudLayout.scale(),HudLayout.scale());
         introPanelBottom = 0;
         renderDrawPanel(context);
-        renderIntroPanel(context);
-        // The status card would sit on top of the draw animation; it steps aside while a draw is playing.
-        if (GameStatusHud.shouldRender() && drawStartTimeMs < 0L) {
-            GameStatusHud.render(context, introPanelBottom > 0 ? introPanelBottom + 4 : 6);
+        // Keep the HUD cards' state, but hide them until the draw finishes.
+        if (drawStartTimeMs < 0L) {
+            renderIntroPanel(context);
+            if (GameStatusHud.shouldRender()) {
+                GameStatusHud.render(context, introPanelBottom > 0 ? introPanelBottom + 4 : 6);
+            }
+            renderObjectiveStatusPanel(context);
         }
-        renderObjectiveStatusPanel(context);
         renderWeaponOverheatBar(context);
-        renderObjectiveNoticePanels(context);
+
         renderKeyScramblePanel(context);
-        renderFeedbackPanels(context);
+        context.getMatrices().popMatrix();
+        CombatFeed.render(context, Math.max(60, Math.round((KEY_PANEL_TOP + keyScrambleReservedHeight()) * HudLayout.scale())));
     }
 
     private static int keyScramblePanelHeight() {
@@ -216,7 +186,7 @@ public class WildcardDrawOverlay {
         }
 
         TextRenderer textRenderer = client.textRenderer;
-        int screenWidth = client.getWindow().getScaledWidth();
+        int screenWidth = HudLayout.width();
         int rows = KeyScrambleController.size();
         int panelWidth = Math.min(KEY_PANEL_WIDTH, Math.max(80, screenWidth - 12));
         int panelHeight = keyScramblePanelHeight();
@@ -225,7 +195,7 @@ public class WildcardDrawOverlay {
         int accent = 0xFFFFB84D;
         long now = System.currentTimeMillis();
 
-        context.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, 0xD8161B22);
+        context.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, HudLayout.background());
         context.fill(panelX + panelWidth - 2, panelY, panelX + panelWidth, panelY + panelHeight, accent);
         context.fill(panelX, panelY, panelX + panelWidth, panelY + 1, accent);
 
@@ -256,8 +226,8 @@ public class WildcardDrawOverlay {
         }
 
         TextRenderer textRenderer = client.textRenderer;
-        int screenWidth = client.getWindow().getScaledWidth();
-        int screenHeight = client.getWindow().getScaledHeight();
+        int screenWidth = HudLayout.width();
+        int screenHeight = HudLayout.height();
         int barWidth = 64;
         int barHeight = 6;
         int x = screenWidth / 2 - barWidth / 2;
@@ -285,6 +255,10 @@ public class WildcardDrawOverlay {
         context.drawText(textRenderer, Text.literal(label), screenWidth / 2 - labelWidth / 2, y + barHeight + 3, overheated ? 0xFFFF6B6B : 0xFFE6EDF3, true);
     }
 
+    public static boolean isIntroExpanded() {
+        return introVisible && !introHiding;
+    }
+
     private static void renderIntroPanel(DrawContext context) {
         if (!introVisible || introName.isBlank()) {
             return;
@@ -292,7 +266,7 @@ public class WildcardDrawOverlay {
 
         MinecraftClient client = MinecraftClient.getInstance();
         TextRenderer textRenderer = client.textRenderer;
-        int screenWidth = client.getWindow().getScaledWidth();
+        int screenWidth = HudLayout.width();
         String introTitle = tr(HunterWildcardText.spec("hud.intro.title", wildcardDisplayName(introName)));
         String introDescriptionText = tr(introDescription);
         int maxAvailableWidth = Math.max(80, screenWidth - 6);
@@ -301,7 +275,7 @@ public class WildcardDrawOverlay {
         boolean needsWide = textRenderer.getWidth(introTitle) > compactWidth - 12
                 || (!introDescriptionText.isBlank() && textRenderer.getWidth(introDescriptionText) > compactWidth - 12);
         int panelWidth = needsWide ? wideWidth : compactWidth;
-        int maxDescriptionLines = needsWide ? 5 : 3;
+        int maxDescriptionLines = needsWide ? 3 : 2;
         List<String> descriptionLines = introDescriptionText.isBlank()
                 ? List.of()
                 : wrap(textRenderer, introDescriptionText, panelWidth - 12, maxDescriptionLines);
@@ -316,16 +290,16 @@ public class WildcardDrawOverlay {
             return;
         }
 
-        float progress = smooth(Math.min(1.0F, elapsed / (float) INTRO_SLIDE_MS));
+        float progress = DisplayPreferences.get.reducedMotion ? 1 : smooth(Math.min(1.0F, elapsed / (float) INTRO_SLIDE_MS));
         if (introHiding) {
             progress = 1.0F - progress;
         }
         float alpha = Math.max(0.0F, Math.min(1.0F, progress));
         int panelX = -Math.round((panelWidth + 2) * (1.0F - progress));
-        int panelY = 22;
+        int panelY = DisplayPreferences.get.inset + 18;
 
         introPanelBottom = panelY + panelHeight;
-        context.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, withAlpha(0xD8161B22, alpha));
+        context.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, withAlpha(HudLayout.background(), alpha));
         context.fill(panelX, panelY, panelX + 2, panelY + panelHeight, withAlpha(0xFF7FC2FF, alpha));
         context.fill(panelX, panelY + panelHeight - 1, panelX + panelWidth, panelY + panelHeight, withAlpha(0xAA7FC2FF, alpha));
 
@@ -346,17 +320,15 @@ public class WildcardDrawOverlay {
         }
 
         TextRenderer textRenderer = client.textRenderer;
-        int screenWidth = client.getWindow().getScaledWidth();
-        int screenHeight = client.getWindow().getScaledHeight();
-        int maxAvailableWidth = Math.max(96, screenWidth - 8);
+        int screenWidth = HudLayout.width();
+        int maxAvailableWidth = Math.max(120, Math.min(280,(int)(screenWidth*0.48F)));
         String objectiveDisplayText = objectiveText.isBlank() ? "" : tr(objectiveText);
         String hunterDisplayText = objectiveHunterText.isBlank() ? "" : tr(objectiveHunterText);
         int widest = Math.max(textRenderer.getWidth(objectiveDisplayText), textRenderer.getWidth(hunterDisplayText));
-        int panelWidth = Math.min(Math.min(224, maxAvailableWidth), Math.max(156, widest + 42));
-        boolean twoLines = !objectiveDisplayText.isEmpty() && !hunterDisplayText.isEmpty();
-        int panelHeight = twoLines ? 44 : 36;
-        int visualPanelWidth = scaledObjectiveSize(panelWidth);
-        int visualPanelHeight = scaledObjectiveSize(panelHeight);
+        int panelWidth = Math.min(maxAvailableWidth, Math.max(184, widest + 20));
+        List<String> objectiveLines=objectiveDisplayText.isBlank()?List.of():wrap(textRenderer,objectiveDisplayText,panelWidth-18,2);
+        List<String> hunterLines=hunterDisplayText.isBlank()?List.of():wrap(textRenderer,hunterDisplayText,panelWidth-18,2);
+        int panelHeight=24+(objectiveLines.size()+hunterLines.size())*12+(com.xiaoming.hunterwildcard.client.ClientGameStatus.details==null?0:15);
         long elapsed = objectiveTransitionStartTimeMs < 0L ? OBJECTIVE_SLIDE_MS : System.currentTimeMillis() - objectiveTransitionStartTimeMs;
         if (objectiveHiding && elapsed >= OBJECTIVE_SLIDE_MS) {
             objectiveVisible = false;
@@ -371,129 +343,27 @@ public class WildcardDrawOverlay {
             progress = 1.0F - progress;
         }
         float alpha = Math.max(0.0F, Math.min(1.0F, progress));
-        int panelX = -Math.round((visualPanelWidth + 2) * (1.0F - progress));
-        int panelY = objectiveBaseY(screenHeight, visualPanelHeight);
+        int panelX = DisplayPreferences.get.inset - (DisplayPreferences.get.reducedMotion?0:Math.round((panelWidth + DisplayPreferences.get.inset) * (1.0F - progress)));
+        int panelY = Math.max(DisplayPreferences.get.inset, (HudLayout.height() - panelHeight) / 2);
         int accent = objectiveAccent(objectiveStyle);
 
-        renderScaledObjectiveStatusPanel(context, textRenderer, panelX, panelY, panelWidth, panelHeight, accent, alpha, objectiveDisplayText, hunterDisplayText);
+        renderObjectiveCard(context, textRenderer, panelX, panelY, panelWidth, panelHeight, accent, alpha, objectiveLines, hunterLines);
     }
 
-    private static void renderObjectiveNoticePanels(DrawContext context) {
-        if (objectiveNoticeEntries.isEmpty()) {
-            return;
+    private static void renderObjectiveCard(DrawContext context, TextRenderer font, int x, int y, int width, int height, int accent, float alpha, List<String> objectiveLines, List<String> hunterLines) {
+        // Keep the normal font size. Card size follows the text, never the reverse.
+        context.fill(x,y,x+width,y+height,withAlpha(HudLayout.background(),alpha));
+        context.fill(x,y,x+2,y+height,withAlpha(accent,alpha));
+        context.drawItem(objectiveIcon(objectiveStyle),x+7,y+4);
+        context.drawText(font,Text.literal(tr(HunterWildcardText.key("hud.objective.status_title"))),x+28,y+7,withAlpha(accent,alpha),false);
+        int lineY=y+24;
+        for(String line:objectiveLines) {context.drawText(font,Text.literal(line),x+9,lineY,withAlpha(0xFFE8EDF2,alpha),true);lineY+=12;}
+        for(String line:hunterLines) {context.drawText(font,Text.literal(line),x+9,lineY,withAlpha(0xFFEF7181,alpha),true);lineY+=12;}
+        var detail=com.xiaoming.hunterwildcard.client.ClientGameStatus.details;
+        if(detail!=null){
+            String lives=detail.ownLives()<0?tr(HunterWildcardText.key("common.infinite")):Integer.toString(detail.ownLives());
+            context.drawText(font,Text.literal(trim(font,tr(detail.ownState())+(detail.ownLives()==-2?"":" · ♥ "+lives),width-18)),x+9,lineY+2,withAlpha(0xFFA6B1BD,alpha),false);
         }
-
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.options.hudHidden) {
-            return;
-        }
-
-        long now = System.currentTimeMillis();
-        Iterator<ObjectiveNoticeEntry> iterator = objectiveNoticeEntries.iterator();
-        while (iterator.hasNext()) {
-            ObjectiveNoticeEntry entry = iterator.next();
-            if (entry.topStartTimeMs >= 0L && now - entry.topStartTimeMs >= OBJECTIVE_NOTICE_TOTAL_MS) {
-                iterator.remove();
-            }
-        }
-
-        if (objectiveNoticeEntries.isEmpty()) {
-            return;
-        }
-
-        ObjectiveNoticeEntry first = objectiveNoticeEntries.get(0);
-        if (first.topStartTimeMs < 0L) {
-            first.topStartTimeMs = now;
-        }
-
-        for (int i = 0; i < objectiveNoticeEntries.size(); i++) {
-            renderObjectiveNoticeEntry(context, objectiveNoticeEntries.get(i), i, now);
-        }
-    }
-
-    private static void renderObjectiveNoticeEntry(DrawContext context, ObjectiveNoticeEntry entry, int index, long now) {
-        MinecraftClient client = MinecraftClient.getInstance();
-        TextRenderer textRenderer = client.textRenderer;
-        int screenWidth = client.getWindow().getScaledWidth();
-        int screenHeight = client.getWindow().getScaledHeight();
-        int maxAvailableWidth = Math.max(96, screenWidth - 8);
-        String message = tr(entry.message);
-        int panelWidth = Math.min(Math.min(204, maxAvailableWidth), Math.max(156, textRenderer.getWidth(message) + 42));
-        int panelHeight = 38;
-        int visualPanelWidth = scaledObjectiveSize(panelWidth);
-        int visualPanelHeight = scaledObjectiveSize(panelHeight);
-        int baseY = objectiveBaseY(screenHeight, visualPanelHeight);
-        if (objectiveVisible) {
-            baseY += scaledObjectiveSize(36) + 5;
-        }
-        int targetY = baseY + index * (visualPanelHeight + 5);
-        if (Float.isNaN(entry.currentY)) {
-            entry.currentY = targetY;
-        } else {
-            entry.currentY += (targetY - entry.currentY) * 0.35F;
-        }
-        int panelY = Math.round(entry.currentY);
-        int panelX = objectiveNoticePanelX(visualPanelWidth, entry, now);
-        int accent = objectiveAccent(entry.style);
-
-        renderScaledObjectiveNoticePanel(context, textRenderer, entry, panelX, panelY, panelWidth, panelHeight, accent, message);
-    }
-
-    private static void renderScaledObjectiveStatusPanel(DrawContext context, TextRenderer textRenderer, int panelX, int panelY, int panelWidth, int panelHeight, int accent, float alpha, String objectiveDisplayText, String hunterDisplayText) {
-        var matrices = context.getMatrices();
-        matrices.pushMatrix();
-        matrices.translate(panelX, panelY);
-        matrices.scale(OBJECTIVE_PANEL_SCALE, OBJECTIVE_PANEL_SCALE);
-        context.fill(0, 0, panelWidth, panelHeight, withAlpha(0xB8161B22, alpha));
-        context.fill(0, 0, 3, panelHeight, withAlpha(accent, alpha));
-        context.fill(0, 0, panelWidth, 1, withAlpha(accent, alpha));
-        context.fill(0, panelHeight - 1, panelWidth, panelHeight, withAlpha(accent, alpha));
-
-        context.drawItem(objectiveIcon(objectiveStyle), 8, 10);
-        context.drawText(textRenderer, Text.literal(tr(HunterWildcardText.key("hud.objective.status_title"))), 30, 5, withAlpha(accent, alpha), false);
-        int lineY = 18;
-        if (!objectiveDisplayText.isEmpty()) {
-            context.drawText(textRenderer, Text.literal(trim(textRenderer, objectiveDisplayText, panelWidth - 38)), 30, hunterDisplayText.isEmpty() ? 20 : lineY, withAlpha(0xFFFFFFFF, alpha), true);
-            lineY += 11;
-        }
-        if (!hunterDisplayText.isEmpty()) {
-            context.drawText(textRenderer, Text.literal(trim(textRenderer, hunterDisplayText, panelWidth - 38)), 30, objectiveDisplayText.isEmpty() ? 20 : lineY, withAlpha(0xFFFF8A8A, alpha), true);
-        }
-        matrices.popMatrix();
-    }
-
-    private static void renderScaledObjectiveNoticePanel(DrawContext context, TextRenderer textRenderer, ObjectiveNoticeEntry entry, int panelX, int panelY, int panelWidth, int panelHeight, int accent, String message) {
-        var matrices = context.getMatrices();
-        matrices.pushMatrix();
-        matrices.translate(panelX, panelY);
-        matrices.scale(OBJECTIVE_PANEL_SCALE, OBJECTIVE_PANEL_SCALE);
-        context.fill(0, 0, panelWidth, panelHeight, 0xB8161B22);
-        context.fill(0, 0, 3, panelHeight, accent);
-        context.fill(0, 0, panelWidth, 1, accent);
-        context.fill(0, panelHeight - 1, panelWidth, panelHeight, accent);
-
-        context.drawItem(objectiveIcon(entry.style), 8, 11);
-        context.drawText(textRenderer, Text.literal(tr(HunterWildcardText.key("hud.objective.notice_title"))), 30, 5, accent, false);
-        context.drawText(textRenderer, Text.literal(trim(textRenderer, message, panelWidth - 38)), 30, 20, 0xFFFFFFFF, true);
-        matrices.popMatrix();
-    }
-
-    private static int objectiveNoticePanelX(int panelWidth, ObjectiveNoticeEntry entry, long now) {
-        int travel = panelWidth + 16;
-        long entryElapsed = now - entry.startTimeMs;
-        if (entryElapsed < OBJECTIVE_NOTICE_IN_MS) {
-            float progress = smooth(entryElapsed / (float) OBJECTIVE_NOTICE_IN_MS);
-            return -travel + Math.round(travel * progress);
-        }
-
-        long topElapsed = entry.topStartTimeMs < 0L ? 0L : now - entry.topStartTimeMs;
-        long outStart = OBJECTIVE_NOTICE_IN_MS + OBJECTIVE_NOTICE_HOLD_MS;
-        if (entry.topStartTimeMs >= 0L && topElapsed > outStart) {
-            float progress = smooth((topElapsed - outStart) / (float) OBJECTIVE_NOTICE_OUT_MS);
-            return -Math.round(travel * progress);
-        }
-
-        return 0;
     }
 
     private static void renderDrawPanel(DrawContext context) {
@@ -514,18 +384,18 @@ public class WildcardDrawOverlay {
 
         MinecraftClient client = MinecraftClient.getInstance();
         TextRenderer textRenderer = client.textRenderer;
-        int screenWidth = client.getWindow().getScaledWidth();
+        int screenWidth = HudLayout.width();
         int panelX = 10;
         int panelY = 10;
         int panelWidth = Math.min(146, Math.max(118, screenWidth - 20));
         int panelHeight = 38;
         float alpha = drawAlpha(elapsed);
-        String displayedId = displayedName(elapsed);
+        String displayedId = DisplayPreferences.get.reducedMotion && elapsed < DRAW_SPIN_MS ? "" : displayedName(elapsed);
         String displayedName = wildcardDisplayName(displayedId);
         boolean revealed = elapsed >= DRAW_SPIN_MS;
         int accent = revealed ? 0xFF77E287 : 0xFF7FC2FF;
 
-        context.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, withAlpha(0xD8161B22, alpha));
+        context.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, withAlpha(HudLayout.background(), alpha));
         context.fill(panelX, panelY, panelX + 3, panelY + panelHeight, withAlpha(accent, alpha));
         context.fill(panelX, panelY + panelHeight - 2, panelX + Math.round(panelWidth * Math.min(1.0F, elapsed / (float) DRAW_TOTAL_MS)), panelY + panelHeight, withAlpha(accent, alpha));
 
@@ -535,127 +405,6 @@ public class WildcardDrawOverlay {
 
         context.drawText(textRenderer, Text.literal(tr(revealed ? HunterWildcardText.key("hud.draw.revealed") : HunterWildcardText.key("hud.draw.drawing"))), panelX + 30, panelY + 6, withAlpha(0xFFC9D4DE, alpha), false);
         context.drawText(textRenderer, Text.literal(trim(textRenderer, displayedName, panelWidth - 38)), panelX + 30, panelY + 21, withAlpha(0xFFFFFFFF, alpha), true);
-    }
-
-    private static void renderFeedbackPanels(DrawContext context) {
-        if (feedbackEntries.isEmpty()) {
-            return;
-        }
-
-        long now = System.currentTimeMillis();
-        Iterator<FeedbackEntry> iterator = feedbackEntries.iterator();
-        while (iterator.hasNext()) {
-            FeedbackEntry entry = iterator.next();
-            if (entry.topStartTimeMs >= 0L && now - entry.topStartTimeMs >= FEEDBACK_TOTAL_MS) {
-                iterator.remove();
-            }
-        }
-
-        if (feedbackEntries.isEmpty()) {
-            return;
-        }
-
-        FeedbackEntry first = feedbackEntries.get(0);
-        if (first.topStartTimeMs < 0L) {
-            first.topStartTimeMs = now;
-        }
-
-        for (int i = 0; i < feedbackEntries.size(); i++) {
-            renderFeedbackEntry(context, feedbackEntries.get(i), i, now);
-        }
-    }
-
-    private static void renderFeedbackEntry(DrawContext context, FeedbackEntry entry, int index, long now) {
-        MinecraftClient client = MinecraftClient.getInstance();
-        TextRenderer textRenderer = client.textRenderer;
-        int screenWidth = client.getWindow().getScaledWidth();
-        int screenHeight = client.getWindow().getScaledHeight();
-        boolean kill = entry.style.equals("kill");
-        float scale = kill ? KILL_PANEL_SCALE : 1.0F;
-        int panelWidth = Math.min(204, Math.max(160, Math.round((screenWidth - 24) / scale)));
-        int panelHeight = 50;
-        int visualWidth = Math.round(panelWidth * scale);
-        int visualHeight = Math.round(panelHeight * scale);
-        int targetX = screenWidth - visualWidth;
-        int targetY = 10 + keyScrambleReservedHeight() + index * (visualHeight + 5);
-        if (Float.isNaN(entry.currentY)) {
-            entry.currentY = targetY;
-        } else {
-            entry.currentY += (targetY - entry.currentY) * 0.35F;
-        }
-        int panelY = Math.round(entry.currentY);
-        int panelX = feedbackPanelX(screenWidth, visualWidth, targetX, entry, now);
-        int accent = feedbackAccent(entry.style);
-
-        if (kill && index == 0) {
-            renderKillFlash(context, screenWidth, screenHeight, now);
-        }
-
-        var matrices = context.getMatrices();
-        matrices.pushMatrix();
-        matrices.translate(panelX, panelY);
-        matrices.scale(scale, scale);
-        context.fill(0, 0, panelWidth, panelHeight, kill ? 0xF01A0F12 : 0xE0161B22);
-        context.fill(0, 0, kill ? 4 : 3, panelHeight, accent);
-        context.fill(0, 0, panelWidth, 1, accent);
-        context.fill(0, panelHeight - 1, panelWidth, panelHeight, accent);
-        if (kill) {
-            // Short bright pulse across the card right after the kill lands.
-            long elapsed = now - entry.startTimeMs;
-            if (elapsed < KILL_FLASH_MS) {
-                int alpha = Math.round(0x80 * (1.0F - elapsed / (float) KILL_FLASH_MS));
-                context.fill(0, 0, panelWidth, panelHeight, (alpha << 24) | 0xFF3B3B);
-            }
-        }
-
-        context.drawItem(feedbackIcon(entry.style), 10, 17);
-        String title = tr(entry.title);
-        String line1 = tr(entry.line1);
-        String line2 = tr(entry.line2);
-        context.drawText(textRenderer, Text.literal(trim(textRenderer, title, panelWidth - 44)), 34, 6, accent, kill);
-        context.drawText(textRenderer, Text.literal(trim(textRenderer, line1, panelWidth - 44)), 34, 21, 0xFFFFFFFF, true);
-        if (!line2.isBlank()) {
-            context.drawText(textRenderer, Text.literal(trim(textRenderer, line2, panelWidth - 44)), 34, 36, 0xFFFFD966, false);
-        }
-        matrices.popMatrix();
-    }
-
-    /** Red vignette that fades out over the first few hundred milliseconds after a kill card arrives. */
-    private static void renderKillFlash(DrawContext context, int screenWidth, int screenHeight, long now) {
-        if (killFlashStartMs < 0L) {
-            return;
-        }
-        long elapsed = now - killFlashStartMs;
-        if (elapsed >= KILL_FLASH_MS) {
-            killFlashStartMs = -1L;
-            return;
-        }
-        float strength = 1.0F - elapsed / (float) KILL_FLASH_MS;
-        int alpha = Math.round(0x70 * strength);
-        int color = (alpha << 24) | 0xFF2A2A;
-        int thickness = Math.max(6, Math.min(screenWidth, screenHeight) / 14);
-        context.fill(0, 0, screenWidth, thickness, color);
-        context.fill(0, screenHeight - thickness, screenWidth, screenHeight, color);
-        context.fill(0, thickness, thickness, screenHeight - thickness, color);
-        context.fill(screenWidth - thickness, thickness, screenWidth, screenHeight - thickness, color);
-    }
-
-    private static int feedbackPanelX(int screenWidth, int panelWidth, int targetX, FeedbackEntry entry, long now) {
-        int travel = panelWidth + 16;
-        long entryElapsed = now - entry.startTimeMs;
-        if (entryElapsed < FEEDBACK_IN_MS) {
-            float progress = smooth(entryElapsed / (float) FEEDBACK_IN_MS);
-            return screenWidth + 4 - Math.round(travel * progress);
-        }
-
-        long topElapsed = entry.topStartTimeMs < 0L ? 0L : now - entry.topStartTimeMs;
-        long outStart = FEEDBACK_IN_MS + FEEDBACK_HOLD_MS;
-        if (entry.topStartTimeMs >= 0L && topElapsed > outStart) {
-            float progress = smooth((topElapsed - outStart) / (float) FEEDBACK_OUT_MS);
-            return targetX + Math.round(travel * progress);
-        }
-
-        return targetX;
     }
 
     private static String displayedName(long elapsed) {
@@ -703,10 +452,6 @@ public class WildcardDrawOverlay {
 
     private static int objectiveBaseY(int screenHeight, int panelHeight) {
         return Math.max(24, screenHeight / 2 - panelHeight / 2 - 18);
-    }
-
-    private static int scaledObjectiveSize(int size) {
-        return Math.max(1, Math.round(size * OBJECTIVE_PANEL_SCALE));
     }
 
     private static int objectiveAccent(String style) {
@@ -796,24 +541,6 @@ public class WildcardDrawOverlay {
         int baseAlpha = color >>> 24;
         int scaledAlpha = Math.max(0, Math.min(255, Math.round(baseAlpha * alpha)));
         return (color & 0x00FFFFFF) | (scaledAlpha << 24);
-    }
-
-    private static final class FeedbackEntry {
-        private final String title;
-        private final String line1;
-        private final String line2;
-        private final String style;
-        private final long startTimeMs;
-        private long topStartTimeMs = -1L;
-        private float currentY = Float.NaN;
-
-        private FeedbackEntry(String title, String line1, String line2, String style, long startTimeMs) {
-            this.title = title;
-            this.line1 = line1;
-            this.line2 = line2;
-            this.style = style;
-            this.startTimeMs = startTimeMs;
-        }
     }
 
     private static final class ObjectiveNoticeEntry {

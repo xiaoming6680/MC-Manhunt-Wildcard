@@ -1,104 +1,324 @@
 # Manhunt Wildcard
 
-[English](README.en.md) | 简体中文
+English · [简体中文](README.zh-CN.md) · [Modrinth](https://modrinth.com/mod/manhunt-wildcard) · [Changelog](CHANGELOG.md)
 
-Manhunt Wildcard 是一个用于 Minecraft Manhunt / 猎人追逃玩法的 Fabric 模组。玩家分为猎人和逃亡者，在对局中周期性触发随机外卡事件，让追逃节奏持续变化。
+**Hunt, escape, and adapt to random rules that change the chase.**
+
+Minecraft `1.21.11–26.2` · Fabric · 28 wildcards · English / Chinese
 
 ![Manhunt Wildcard](Manhunt-Wildcard.jpg)
 
-## 灵感来源
+[Getting started](#getting-started) · [Interface guide](#interface-guide) · [Presets](#presets) · [Wildcards](#wildcards) · [Commands and configuration](#commands-and-configuration)
 
-本 MOD 的玩法灵感部分来自近期赛季 APEX Legends 的外卡活动：在常规对抗规则之外加入临时规则变化，让每一局都出现新的风险、机会和战术选择。Manhunt Wildcard 将这种"局内变体规则"的思路放进 Minecraft Manhunt，让追逃过程不再只依赖固定路线和固定节奏。
+## Getting started
 
-## 核心功能
+Install the matching mod build on the client and server, together with Fabric API for that Minecraft version. Use Fabric Loader `0.19.3` or newer.
 
-- 猎人 vs 逃亡者阵营玩法
-- 管理员控制对局开始、停止和外卡测试
-- 准备阶段，避免开局混战
-- 猎人追踪指南针，按配置周期刷新目标
-- 指南针可选目标：潜行 + 右键循环「最近 → 各逃亡者」，右键打开选择菜单，物品名显示目标和距离
-- 猎人名字红色、逃亡者蓝色，原版追踪条只显示本阵营
-- 击杀判定：被猎人打过后 15 秒内的死亡计为该猎人击杀，纯环境死亡按次数折算
-- 死亡等待全屏黑屏，复活点为远离死亡点（逃亡者还远离猎人）的随机地表位置
-- 存活模式自动加方形世界边界（半径可配），逃亡者不能靠无限拉扯稳赢
-- 未加入阵营的玩家自动旁观；部分规则可在对局中热更新
-- 周期性随机外卡，通过 HUD、BossBar、聊天提示展示
-- 多种逃亡者与猎人胜利条件
-- 可配置复活模式、生命数、死亡掉落和准备边界
-- 可配置猎人对逃亡者伤害倍率、猎人 / 逃亡者移速倍率
-- 可配置猪灵交易末影珍珠概率（默认 40%）
-- 等待阶段自动显示"本局设置"HUD，对局中普通玩家按 `M` 查看对局状态
-- 中英文语言文件，支持 Minecraft 原生语言切换
+| Minecraft | Java | Release file |
+| --- | --- | --- |
+| 1.21.11 | 21+ | `MC-Manhunt-Wildcard-1.4.5-mc1.21.11.jar` |
+| 26.1 | 25+ | `MC-Manhunt-Wildcard-1.4.5-mc26.1.jar` |
+| 26.1.1 | 25+ | `MC-Manhunt-Wildcard-1.4.5-mc26.1.1.jar` |
+| 26.1.2 | 25+ | `MC-Manhunt-Wildcard-1.4.5-mc26.1.2.jar` |
+| 26.2 | 25+ | `MC-Manhunt-Wildcard-1.4.5-mc26.2.jar` |
 
-## 一局是怎么进行的
+Each file supports its listed stable version. Download from [Modrinth](https://modrinth.com/mod/manhunt-wildcard/versions) or [GitHub Releases](https://github.com/xiaoming6680/MC-Manhunt-Wildcard/releases). See [Building](docs/BUILDING.md) for source builds.
 
-### 1. 准备阶段
+The current mod version is `1.4.5`. Install this same JAR on both sides and remove old copies. New settings use protocol v3 and cannot be mixed with builds using older protocols. Incompatible peers receive an explicit update message.
 
-开始对局后进入准备倒计时。猎人被限制在出生点附近的边界内，逃亡者趁这段时间拉开距离。顶部 BossBar 显示剩余准备时间。
+1. Place the matching `MC-Manhunt-Wildcard-1.4.5-mc<game-version>.jar` in the instance's `mods/` folder.
+2. Enter a world, press **M**, and join the red Hunters or blue Runners.
+3. An operator chooses a preset or adjusts rules, clicks **Apply**, then starts the round once both sides have players.
 
-![准备阶段](screenshot/GAMEPLAY1.png)
+Hunters track runners with a compass; runners complete the victory objective. Right-click the compass to choose a target, or sneak and right-click to cycle. Unassigned players spectate.
 
-### 2. 对局进行中
+While waiting to respawn, automatically watch a living teammate. Press **Z / X** for the previous / next teammate (rebindable in Controls), or fly freely when no teammates remain. Eliminated players start in free spectator mode: **Z / X** visits any other online player's position, including opponents, while retaining free flight. Respawn timers, remaining lives, and respawn locations still follow the existing rules.
 
-准备结束后猎人拿到追踪指南针开始追击。左侧目标面板显示逃亡者当前的胜利目标（例如存活时间、收集物品），底部 ActionBar 提示自己的身份。
+Nether and End deaths return to the Overworld: keep a valid Overworld respawn point, or fall back to world spawn. For deaths in other dimensions, random respawn searches around that Overworld destination. Watching teammates never changes the destination.
 
-![对局进行中](screenshot/GAMEPLAY2.png)
+Every successful round start resets advancement progress for all online players, including spectators and partially completed advancements. Team death-drop rules also apply during preparation.
 
-### 3. 外卡触发
+## Interface guide
 
-每隔一段时间随机抽取一张外卡，先播放抽卡动画，然后在左上角显示规则说明，BossBar 显示剩余时间。下图为"轻盈之身"生效时的画面。
+Screenshots use Chinese; the interface also follows Minecraft's English language setting.
 
-![外卡触发](screenshot/GAMEPLAY4.png)
+### Match
 
-### 4. 击杀与复活反馈
+Team cards show members and status, followed by each side's objective. Join actions use team colors; leaving a team is red.
 
-猎人击杀逃亡者时右上角弹出击杀反馈；在击杀计数模式下还会显示距离目标还差几次。逃亡者复活时也有对应提示。
+![Match and teams](screenshot/UI_lobby.png)
 
-![击杀反馈](screenshot/GAMEPLAY5.png)
+### Rules
 
-![复活提示](screenshot/GAMEPLAY6.png)
+The overview groups the current rules. Use the sidebar or a small **Adjust** link to edit a category. Inactive parameters and repeated explanations stay hidden. Time inputs accept `minutes:seconds` or seconds.
 
-### 5. 对局结算
+![Rules overview at GUI scale 4](screenshot/UI_rules_scale4.png)
 
-任一方达成胜利条件后进入结算：右上角显示胜负，聊天栏输出完整结算信息，胜方头顶放烟花。
+Changes stay in a draft until **Apply**; **Undo changes** discards them. Everyone can read the rules; operators can edit them. During a round, only supported live settings are editable. Conflicts or failed saves preserve the draft and show an error.
 
-![对局结算](screenshot/GAMEPLAY3.png)
+### Wildcards
 
-### 6. 状态 HUD
+Four categories retain the matrix layout. Search names, effects, or IDs. Hover the small **i** for an explanation; **Settings** edits parameters only. Enable or disable wildcards in the matrix; resetting parameter defaults preserves their switches. Timing inputs sit directly above the matrix.
 
-等待阶段只要有人加入队伍，左上角自动显示"本局设置"，所有玩家都能看到这局的胜利条件、复活规则和外卡设置；对局开始后它会自动消失。
+![Wildcard matrix](screenshot/UI_matrix.png)
 
-![本局设置](screenshot/HUD_lobby.png)
+Global **Enable all / Disable all** affects every wildcard. Category actions affect only their category. Search does not narrow the scope of bulk changes.
 
-对局中，非 OP 玩家按 `M` 可以随时切换"对局状态"面板，查看阶段倒计时、当前外卡和剩余时间。
+<details>
+<summary>Item picker, hover explanations, and display preferences</summary>
 
-![对局状态](screenshot/HUD_status.png)
+Search item names for collection objectives, or enter an item ID.
 
-## 新外卡一览
+![Item picker](screenshot/UI_items.png)
 
-| 受伤乱键 | 全体变小 |
+Hover explanations show only the effect and wrap automatically.
+
+![Wildcard explanation](screenshot/UI_wildcard_tooltip.png)
+
+Local preferences control HUD scale, opacity, margins, animation, flashes, and feedback duration. **H** toggles the status HUD.
+
+![Display preferences](screenshot/UI_display.png)
+
+</details>
+
+## Presets
+
+Hover to preview, click to create an editable draft, then apply.
+
+| Preset | Runner objective | Respawns and wildcards |
+| --- | --- | --- |
+| Classic Manhunt | Defeat the Ender Dragon | One runner life, unlimited hunter respawns; all wildcards off |
+| Dragon Hunt | Defeat the Ender Dragon | Three runner lives; current wildcard switches retained |
+| Timed Survival | Survive 15 minutes | Three runner lives; current wildcard switches retained |
+| Collection Race | Collect 16 diamonds | Three runner lives; current wildcard switches retained |
+
+Classic follows the dragon-hunt format of [Dream's Manhunt](https://www.youtube.com/watch?v=qqOxkuO3ip0): vanilla drops and respawn locations, 1× damage and speed, and no extra piglin trade boost. This mod retains a one-second preparation and hunter respawn transition. With multiple runners, any runner's elimination ends the round; these rules remain adjustable.
+
+## Wildcards
+
+Wildcards trigger at the configured interval. The top-left introduction stays visible until the wildcard ends; its i in the M menu also explains the effect. Combat and match feedback appear at the top right.
+
+| Key Scramble | Backrooms |
 | --- | --- |
-| ![受伤乱键](screenshot/WILDCARD_key_scramble.png) | ![全体变小](screenshot/WILDCARD_tiny_players.png) |
+| ![Key Scramble](screenshot/WILDCARD_key_scramble.png) | ![Backrooms](screenshot/WILDCARD_backrooms.png) |
 
-| 小心翼翼 | 你是谁？ |
+<details>
+<summary>All 28 wildcards and effects</summary>
+
+| Category | Wildcard | Effect |
+| --- | --- | --- |
+| Combat | Backstab | PvP hits only land from behind, at double damage; frontal hits do nothing, not even knockback |
+| Combat | Vampire | Damage dealt to any living thing heals you |
+| Combat | Last Stand | At three hearts or less every hit you land is lethal |
+| Combat | Weapon Overheat | Rapid attacks build heat; a HUD bar under the crosshair shows it |
+| Combat | Stay Away! | Runners get an unbreakable Sharpness 255 golden sword that cannot be dropped or picked up by hunters |
+| Combat | Fragile | Everyone's max health drops to three hearts |
+| Combat | Explosive Death | Deaths or kills trigger explosions |
+| Combat | Key Scramble | Every hit shuffles movement keys; a top-right HUD shows the current layout |
+| Mobility | Flash | Everyone gets Speed X |
+| Mobility | Shadow Step | Players you hit blink 1-4 blocks away |
+| Mobility | Hurt Teleport | Taking damage teleports you 1-15 blocks away; lava is fair game |
+| Mobility | Space Shift | Every 60 s (configurable) everyone in the same dimension is dealt a random position (possibly their own), with a running countdown |
+| Mobility | Portals | Random pairs each get a one-shot portal (end gateway blocks) that leads to the partner's portal; an odd player joins a random pair |
+| Mobility | Pearl Frenzy | Temporary ender pearls with possible side effects; unused grants expire at the end, preserving your own pearls |
+| Mobility | Wind Charge Brawl | Periodic wind charges |
+| Mobility | Light Load | Light armor speeds up, heavy armor slows down |
+| Mobility | Hunger Chase | Eating anything grants 10 s of Speed VI |
+| Vision | Still Glow | Stand still for 1 s and you glow (red hunters, blue runners); moving stops it |
+| Vision | Sneak Freeze | Sneaking makes you invisible and invulnerable, but you cannot move, jump or attack |
+| Vision | Hunter Radar | Runners glow all along; they get a warning when a hunter comes within the configured range |
+| Vision | Who Are You? | Everyone becomes Steve, name tags hide, tab list and chat show "Player" |
+| Vision | Tiny Players | Everyone shrinks to about one block tall |
+| Vision | World Tilt | After a 30 s countdown, gravity turns sideways together with the camera, body collision and controls. Walk and jump on walls; sideways falls cause damage. Normal gravity returns when the wildcard ends |
+| World & Items | Supply Drop | Chests land at the midpoint between the sides (one per runner); a beacon marks the spot 20 s ahead |
+| World & Items | Drop Bomb | Anything thrown from the inventory explodes after 2 s without breaking blocks or destroying drops |
+| World & Items | Chain Mining | Breaking a block also clears the 3x3x3 ahead along your look direction, only what your tool can harvest |
+| World & Items | Block Decay | Newly placed blocks vanish after a delay |
+| World & Items | Backrooms! | Everyone drops into a yellow maze dimension; every 20 s both sides glow for 5 s (hunters red, runners blue); fall through a false floor to get home; once a whole side is out everyone returns |
+
+</details>
+
+<details>
+<summary>HUD, kill feedback, and results (test scenarios)</summary>
+
+![Match HUD](screenshot/UI_wildcard_intro.png)
+
+![Kill feedback](screenshot/UI_combat.png)
+
+![Results](screenshot/UI_result.png)
+
+</details>
+
+## Commands and configuration
+
+Server rules: `config/hunterwildcard.json`. Local display preferences: `config/hunterwildcard-ui.json`; these do not change server rules.
+
+New installations default to wildcard dragon hunts: runners have 3 total lives, hunters respawn indefinitely, and hunters win once all runners are out. All 28 wildcards are enabled. Both sides drop their inventory on death and use 1× damage and movement speed.
+
+| Default option | Setting |
 | --- | --- |
-| ![小心翼翼](screenshot/WILDCARD_fragile.png) | ![你是谁？](screenshot/WILDCARD_who_are_you.png) |
+| Preparation / results display | 60 seconds / 10 seconds |
+| Compass refresh | Every 3 seconds |
+| Ordinary wildcards | Fixed 180-second gap and 120-second duration; the gap starts after the previous event ends, with another 5 seconds for the draw |
+| Initial ranges when random timing is selected | Gaps of 120–240 seconds, durations of 90–150 seconds; fixed timing is the default |
+| Backrooms time limit | Separate 180-second timer; escape conditions can end it early |
+| Respawn wait | 10 seconds for both sides; each previous hunter death adds 3 seconds, capped at 60 extra seconds |
+| Random respawn | Enabled; runners use a 150–300 block search and hunters 64–128 blocks; hunters try to stay at least 96 blocks from runners. Deaths in other dimensions use the Overworld destination as their search origin |
+| Piglin pearl trade chance | Boost enabled, 20% |
+| Blaze rod drop chance | Override disabled by default; enable in Rules → Balance to set 0–100%, initially 50% |
+| Wind charge explosion multiplier | 150% |
+| Initial objective when survive-time mode is selected | 15 minutes, with a 500-block border radius; the default victory objective remains the dragon |
 
-| 别过来！ | 后室！ |
+Upgrading preserves existing configuration values; missing fields use the new defaults. For settings exposed in the M menu, use **Reset page** in the relevant category or wildcard settings page, review the draft, and click **Apply**; only editable fields on the current page are restored. Settings absent from the menu, such as compass refresh and results duration, require editing the JSON and running `/hw config reload`. The Classic Manhunt preset still uses one life and no wildcards.
+
+<details>
+<summary>Player and operator commands</summary>
+
+| Command | Description |
 | --- | --- |
-| ![别过来！](screenshot/WILDCARD_stay_away.png) | ![后室！](screenshot/WILDCARD_backrooms.png) |
+| `/hw join hunter` | Join hunters |
+| `/hw join runner` | Join runners |
+| `/hw leave` | Leave your team |
+| `/hw status` | Show the current game status |
+| `/hw wildcard list` | List wildcard enable states |
 
-后室结束后从主世界进入点上空无伤落回：
+## Operator Commands
 
-![后室返回](screenshot/WILDCARD_backrooms_return.png)
+These commands require OP:
 
-## 外卡列表
+| Command | Description |
+| --- | --- |
+| `/hw start` | Start the game |
+| `/hw stop` | Stop the game |
+| `/hw wildcard roll` | Roll a wildcard now |
+| `/hw wildcard stop` | Stop the current wildcard |
+| `/hw wildcard test <id>` | Test a specific wildcard |
+| `/hw config reload` | Reload config |
+| `/hw config save` | Save config |
+| `/hw debug true` | Enable the debug page |
+| `/hw debug false` | Disable the debug page |
+
+</details>
+
+## Inspiration and license
+
+Inspired by Minecraft Manhunt and the temporary rule changes in APEX Legends wildcard events.
+
+[MIT License](LICENSE)
+
+---
+
+# 简体中文
+
+
+[English](README.en.md) · 简体中文 · [Modrinth](https://modrinth.com/mod/manhunt-wildcard) · [更新日志](CHANGELOG.md)
+
+**追击、逃亡，以及随时改变战局的随机外卡。**
+
+Minecraft `1.21.11–26.2` · Fabric · 28 张外卡 · 中英双语
+
+![Manhunt Wildcard](Manhunt-Wildcard.jpg)
+
+[安装与开局](#安装与开局) · [界面指南](#界面指南) · [玩法预设](#玩法预设) · [外卡](#外卡) · [命令与配置](#命令与配置)
+
+## 安装与开局
+
+客户端与服务端安装对应游戏版本的同一份模组，以及对应版本的 Fabric API。建议使用 Fabric Loader `0.19.3` 或更新版本。
+
+| Minecraft | Java | 发布文件 |
+| --- | --- | --- |
+| 1.21.11 | 21+ | `MC-Manhunt-Wildcard-1.4.5-mc1.21.11.jar` |
+| 26.1 | 25+ | `MC-Manhunt-Wildcard-1.4.5-mc26.1.jar` |
+| 26.1.1 | 25+ | `MC-Manhunt-Wildcard-1.4.5-mc26.1.1.jar` |
+| 26.1.2 | 25+ | `MC-Manhunt-Wildcard-1.4.5-mc26.1.2.jar` |
+| 26.2 | 25+ | `MC-Manhunt-Wildcard-1.4.5-mc26.2.jar` |
+
+每个文件仅对应表中列出的正式版本。从 [Modrinth](https://modrinth.com/mod/manhunt-wildcard/versions) 或 [GitHub Releases](https://github.com/xiaoming6680/MC-Manhunt-Wildcard/releases) 下载。源码构建见[构建文档](docs/BUILDING.md)。
+
+当前模组版本为 `1.4.5`。两端都要替换为本次同一份 JAR，并移除旧包；本次新增配置采用 v3 协议，不能与旧协议构建混用。协议不兼容时会明确提示更新。
+
+1. 将 对应的 `MC-Manhunt-Wildcard-1.4.5-mc<游戏版本>.jar` 放入对应实例的 `mods/`。
+2. 进入世界按 **M**，加入红色猎人或蓝色逃亡者阵营。
+3. 管理员选择预设或调整规则，点击 **应用**，双方有人后开始游戏。
+
+猎人用指南针追踪逃亡者；逃亡者完成胜利目标。指南针右键选择目标，潜行右键循环目标。未加入阵营的玩家旁观。
+
+等待复活时自动观察存活队友，按 **Z / X** 切换上一位 / 下一位队友（可在控制设置中改键）；没有存活队友时可自由飞行观察。已出局玩家默认自由观察，**Z / X** 可前往全场其他在线玩家的位置，包括对方阵营，跳转后仍可自由飞行。复活倒计时、剩余生命与复活位置仍按原规则处理。
+
+地狱或末地死亡后回主世界复活：沿用可用的主世界出生点，否则回世界出生点；开启随机复活时在该主世界位置周围寻找落点。观察队友不会改变复活目的地。
+
+每次成功开局进入准备阶段，重置所有在线玩家的成就进度（含旁观者及部分完成的条件）。死亡掉落规则在准备阶段也生效。
+
+## 界面指南
+
+### 对局
+
+阵营卡片展示成员与状态，下方分阵营显示本局目标。加入按钮使用阵营颜色，离队操作标红。
+
+![对局与阵营](screenshot/UI_lobby.png)
+
+### 规则
+
+主页按分类展示本局规则。左侧子导航或分类旁的 **调整** 进入编辑；无效参数与重复说明收起。输入时间支持 `分:秒` 或秒数。
+
+![规则总览（GUI 缩放 4）](screenshot/UI_rules_scale4.png)
+
+修改保留为草稿，点击 **应用** 后生效；**撤销修改** 放弃草稿。普通玩家可查看规则，管理员可编辑。对局中只开放可热更新的项目，冲突或保存失败会保留草稿并提示。
+
+### 外卡
+
+保留四类矩阵。按名称、效果或 ID 搜索；小 **i** 悬停查看说明，**设置** 仅调整专属参数。外卡开关统一在矩阵操作，设置页的 **本页默认** 只重置参数。时间在顶部编辑。
+
+![外卡矩阵](screenshot/UI_matrix.png)
+
+顶部 **全部开启 / 全部关闭** 操作全部外卡，分类旁入口只操作该分类；搜索不会改变批量操作范围。
+
+<details>
+<summary>物品选择、悬停说明与本地显示设置</summary>
+
+收集目标支持物品名称搜索，也可输入物品 ID。
+
+![物品选择](screenshot/UI_items.png)
+
+悬停只显示效果说明，长文案自动换行。
+
+![外卡说明](screenshot/UI_wildcard_tooltip.png)
+
+本地设置可调整 HUD 缩放、透明度、边距、动画、闪光与击杀反馈停留时间。**H** 切换状态 HUD。
+
+![显示设置](screenshot/UI_display.png)
+
+</details>
+
+## 玩法预设
+
+悬停查看介绍，点击生成可继续调整的草稿，应用后生效。
+
+| 预设 | 逃亡者目标 | 复活与外卡 |
+| --- | --- | --- |
+| 经典玩法 | 击败末影龙 | 逃亡者一命，猎人无限复活；关闭全部外卡 |
+| 经典追龙 | 击败末影龙 | 逃亡者 3 命；保留当前外卡开关 |
+| 限时生存 | 存活 15 分钟 | 逃亡者 3 命；保留当前外卡开关 |
+| 收集竞赛 | 收集 16 颗钻石 | 逃亡者 3 命；保留当前外卡开关 |
+
+经典玩法参考 [Dream 的 Manhunt](https://www.youtube.com/watch?v=qqOxkuO3ip0)：使用原版掉落和复活位置，伤害与移速 1×，关闭额外交易加成。本模组保留 1 秒开局与猎人复活过渡；多逃亡者时，任意一人出局即判阵营失败，可在规则中调整。
+
+## 外卡
+
+外卡按配置间隔随机触发。左上角持续显示当前外卡介绍，直到外卡结束；M 菜单的小 i 也可查看效果。右上角显示击杀与对局反馈。
+
+| 受伤乱键 | 后室 |
+| --- | --- |
+| ![受伤乱键](screenshot/WILDCARD_key_scramble.png) | ![后室](screenshot/WILDCARD_backrooms.png) |
+
+<details>
+<summary>查看全部 28 张外卡及效果</summary>
 
 | 分类 | 外卡 | 效果 |
 | --- | --- | --- |
 | 战斗 | 回头杀 | 玩家之间只有背后攻击有效且双倍，正面攻击无伤害无击退 |
 | 战斗 | 吸血鬼 | 攻击任意生物按伤害回血 |
-| 战斗 | 血怒时刻 | 血量不到 3 颗心时每次攻击一击必杀 |
+| 战斗 | 背水一战 | 血量不到 3 颗心时每次攻击一击必杀 |
 | 战斗 | 武器过热 | 连续攻击积累热量，准星下方 HUD 热量条 |
 | 战斗 | 别过来！ | 逃亡者获得锋利 255 的无限耐久金剑，无法丢弃，猎人无法拾取 |
 | 战斗 | 小心翼翼 | 所有玩家生命上限变为 3 颗心 |
@@ -109,7 +329,7 @@ Manhunt Wildcard 是一个用于 Minecraft Manhunt / 猎人追逃玩法的 Fabri
 | 机动 | 受伤瞬移 | 受伤就被随机传送到 1～15 格外，落点可能是岩浆 |
 | 机动 | 空间波动 | 每 60 秒（可配）同维度所有玩家随机重新分配位置（可能抽到原地），全程倒计时 |
 | 机动 | 传送门 | 随机两两一组，各自附近生成一次性传送门（折跃门方块），进入就传到同组另一人门口；落单者并入随机一组 |
-| 机动 | 珍珠狂潮 | 定期补给末影珍珠，但使用可能有副作用 |
+| 机动 | 珍珠狂潮 | 定期补给临时珍珠，使用可能有副作用；结束时回收剩余赠送珍珠，保留自有珍珠 |
 | 机动 | 风弹乱斗 | 定期补给风弹 |
 | 机动 | 轻装上阵 | 轻甲加速，重甲减速 |
 | 机动 | 饥饿追逐 | 吃任何食物获得 10 秒速度 VI |
@@ -118,73 +338,50 @@ Manhunt Wildcard 是一个用于 Minecraft Manhunt / 猎人追逃玩法的 Fabri
 | 视野 | 猎人雷达 | 逃亡者全程发光，猎人进入警告距离（可配）内时逃亡者收到提示 |
 | 视野 | 你是谁？ | 全员史蒂夫皮肤，隐藏名牌，TAB 和聊天中名字都显示为"玩家" |
 | 视野 | 全体变小 | 所有玩家缩小到约一格高 |
-| 视野 | 地动山摇 | 触发 30 秒后重力转向随机水平方向（全程倒计时），视角、移动、跳跃都在新重力下工作，可以站在树干和墙面上，外卡结束才恢复 |
+| 视野 | 地动山摇 | 倒计时 30 秒后重力转向随机水平方向，视角、身体碰撞与操作同步翻转；可在墙面走跳，侧向跌落有伤害，结束后恢复 |
 | 环境与道具 | 补给空投 | 每隔一段时间在猎人与逃亡者中点投下补给箱（每名逃亡者一只），宣布时竖起信标柱，20 秒后落地 |
 | 环境与道具 | 掉落物炸弹 | 扔出的任何物品 2 秒后爆炸，不破坏方块也不炸掉落物 |
 | 环境与道具 | 连锁挖矿 | 挖方块时朝向前方的 3×3×3 一并破坏并掉落，只算当前工具能采集的方块 |
 | 环境与道具 | 方块腐化 | 新放置方块延迟消失 |
 | 环境与道具 | 后室！ | 全员掉入黄色迷宫维度，每 20 秒双方同时发光 5 秒（猎人红、逃亡者蓝），踩到假地板掉出去回主世界，任一方全员离开则全体返回 |
 
-## 配置界面
+</details>
 
-默认按 `M` 打开菜单（可在按键设置中修改），任何阶段都能打开。界面只有三页，OP 还能看到调试页。
+<details>
+<summary>对局 HUD、击杀反馈与结算示例（测试场景）</summary>
 
-### 对局页
+![对局 HUD](screenshot/UI_wildcard_intro.png)
 
-查看对局状态、加入猎人或逃亡者、由 OP 开始对局；对局开始后这里有一个按钮切换左上角的「对局状态」面板。
+![击杀反馈](screenshot/UI_combat.png)
 
-![对局页](screenshot/GUI_game.png)
+![对局结算](screenshot/UI_result.png)
 
-### 规则页
+</details>
 
-一个总览页，五个子页，点「编辑」进入，左上角面包屑返回：
+## 命令与配置
 
-| 子页 | 内容 |
+服务器规则：`config/hunterwildcard.json`。本地显示偏好：`config/hunterwildcard-ui.json`，不影响服务器规则。
+
+首次运行默认采用外卡追龙：逃亡者共 3 条命，猎人无限复活，所有逃亡者出局才判负，28 张外卡全部开启。双方死亡正常掉落，伤害与移速为 1×。
+
+| 默认项目 | 设置 |
 | --- | --- |
-| 时间与边界 | 准备时间、猎人准备边界 |
-| 胜利条件 | 逃亡者胜利方式四选一（击败末影龙、存活指定时间、到达指定位置、收集指定物品）及其参数；存活模式的世界边界开关与半径；猎人胜利方式二选一（逃亡者全部出局、击杀计数） |
-| 复活与死亡 | 猎人 / 逃亡者复活模式、生命数、复活时间；随机复活点开关与距离；死亡掉落 |
-| 击杀判定 | 猎人击中后的击杀归属窗口（秒）；纯环境死亡几次算一次猎人击杀 |
-| 阵营平衡 | 猎人对逃亡者伤害倍率、双方移速倍率、猪灵交易珍珠概率、追踪条只显示本阵营 |
+| 开局准备 / 结算展示 | 60 秒 / 10 秒 |
+| 指南针刷新 | 每 3 秒 |
+| 普通外卡 | 固定间歇 180 秒、持续 120 秒；间歇从上一张结束后计算，抽卡另需 5 秒 |
+| 切换随机时序后的初始范围 | 间歇 120～240 秒，持续 90～150 秒；默认仍为固定时序 |
+| 后室时限 | 独立计时 180 秒，满足离开条件可提前结束 |
+| 复活等待 | 双方基础 10 秒；猎人每次先前死亡额外增加 3 秒，上限额外 60 秒 |
+| 随机复活 | 开启；逃亡者距死亡点 150～300 格，猎人 64～128 格；猎人尽量避开逃亡者 96 格 |
+| 猪灵珍珠交易概率 | 加成开启，20% |
+| 烈焰棒掉落概率 | 自定义默认关闭；在规则的平衡页启用后可设 0–100%，预设值 50% |
+| 风弹爆炸倍率 | 150% |
+| 切换限时生存后的初始目标 | 15 分钟，边界半径 500 格；默认胜利目标仍为末影龙 |
 
-对局进行中 OP 仍可修改移速、伤害倍率、胜利目标数值、外卡开关与参数、复活时间与复活点、击杀判定、掉落等「热更新」项，保存后全服提示「规则已更新」；准备时间、胜利方式、复活模式等则锁定。
+升级不会覆盖已有配置值；缺失项使用新默认值。菜单内的参数可在 M 菜单对应分类／外卡设置页点击 **本页默认**，检查草稿后点击 **应用**；只恢复当前页可编辑的项目。指南针刷新、结算时长等未在菜单展示的参数需修改 JSON，再执行 `/hw config reload`。“经典玩法”预设仍是一命、无外卡的原版追逃。
 
-![规则页](screenshot/GUI_basic.png)
-
-### 外卡页
-
-设置外卡间隔与持续时间，逐张开关外卡，部分外卡有单独参数（子页）。
-
-![外卡页](screenshot/GUI_wildcards.png)
-
-**调试页**需要先执行 `/hw debug true`，提供开始 / 停止对局、立即抽卡和单独测试任意外卡。
-
-## 环境要求
-
-- Minecraft `1.21.11`
-- Fabric Loader `0.16.0+`
-- Fabric API
-- Java `21`
-
-建议客户端与服务端同时安装。服务端负责对局逻辑，客户端用于配置界面、HUD、皮肤替换和本地语言显示。
-
-## 安装方式
-
-1. 安装 Fabric Loader。
-2. 安装 Fabric API。
-3. 下载 `MC-Manhunt-Wildcard-<version>.jar`。
-4. 将 jar 放入客户端和服务端的 `mods/` 文件夹。
-5. 启动游戏或服务端。
-
-首次启动会生成配置文件：
-
-```text
-config/hunterwildcard.json
-```
-
-内部配置文件名和 MOD ID 仍保留 `hunterwildcard`，用于兼容已有配置、语言 key 和网络协议。
-
-## 玩家命令
+<details>
+<summary>玩家与管理员命令</summary>
 
 | 命令 | 说明 |
 | --- | --- |
@@ -210,15 +407,10 @@ config/hunterwildcard.json
 | `/hw debug true` | 开启调试界面 |
 | `/hw debug false` | 关闭调试界面 |
 
-## 设计目标
+</details>
 
-Manhunt Wildcard 的目标是让 Manhunt 对局更具变化：
+## 灵感与许可
 
-- 让追逃节奏不再完全固定
-- 增加随机性、临场判断和反制空间
-- 保留 Minecraft Manhunt 的核心目标感
-- 给服主提供可配置、可测试、可本地化的玩法扩展
+玩法结合 Minecraft Manhunt 与 APEX Legends 外卡活动的临时规则变化。
 
-## License
-
-本项目使用 MIT License，详见 [LICENSE](LICENSE)。
+[MIT License](LICENSE)

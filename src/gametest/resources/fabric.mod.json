@@ -6,6 +6,9 @@
   "environment": "client",
   "entrypoints": {
     "fabric-client-gametest": [
+      "com.xiaoming.hunterwildcard.test.DeathSpectateClientGameTest",
+      "com.xiaoming.hunterwildcard.test.PreparingInventoryClientGameTest",
+      "com.xiaoming.hunterwildcard.test.PacketProtocolClientGameTest",
       "com.xiaoming.hunterwildcard.test.WildcardHudClientGameTest"
     ]
   },

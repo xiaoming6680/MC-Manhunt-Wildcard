@@ -15,19 +15,36 @@ public class HunterWildcardClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         HunterWildcardPackets.registerPayloadTypes();
+        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
+            if (HunterWildcardPackets.hasIncompatibleProtocol(ClientPlayNetworking.getSendable(),
+                    HunterWildcardPackets.C2S_REQUEST_CONFIG.id())) {
+                handler.getConnection().disconnect(HunterWildcardPackets.incompatibleProtocolMessage());
+            }
+        });
+        net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents.END_CLIENT_TICK.register(c -> com.xiaoming.hunterwildcard.client.ui.ConfigDraft.tick());
         WildcardDrawOverlay.register();
+        ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_ROUND_DETAILS, (payload, context) ->
+                context.client().execute(() -> ClientGameStatus.details = payload));
         ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_SYNC_CONFIG, (payload, context) ->
                 context.client().execute(() -> {
                     ClientGameStatus.update(payload);
+                    com.xiaoming.hunterwildcard.client.ui.ConfigDraft.sync(payload.config());
                     HunterWildcardConfigScreen.receiveSync(payload);
                 }));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             ClientGameStatus.clear();
+            com.xiaoming.hunterwildcard.client.ui.ConfigDraft.clear();
+            WildcardDrawOverlay.reset();
             DeathWaitOverlay.reset();
         });
         DeathWaitOverlay.register();
+        ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_DEATH_SPECTATE, (payload, context) ->
+                context.client().execute(() -> DeathWaitOverlay.updateSpectating(payload.active(), payload.targetName(), payload.targetCount())));
         ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_OPERATION_RESULT, (payload, context) ->
-                context.client().execute(() -> HunterWildcardConfigScreen.receiveOperationResult(payload)));
+                context.client().execute(() -> {
+                    boolean accepted = com.xiaoming.hunterwildcard.client.ui.ConfigDraft.result(payload);
+                    if (payload.requestId() == 0 || accepted) HunterWildcardConfigScreen.receiveOperationResult(payload);
+                }));
         ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_CLOSE_CONFIG_SCREEN, (payload, context) ->
                 context.client().execute(HunterWildcardConfigScreen::closeFromServer));
         ClientPlayNetworking.registerGlobalReceiver(HunterWildcardPackets.S2C_CLEAR_CHAT, (payload, context) ->

@@ -44,3 +44,29 @@ replay_pid*
 task_plan.md
 findings.md
 progress.md
+
+# Local plans, migration output, distribution staging and release credentials
+.planning/
+.plan-attestation
+remappedSrc/
+dist/
+release-staging/
+.tools/
+*.tmp
+*.bak
+*.orig
+*.rej
+*.zip
+*.tar.gz
+*.token
+
+# Local UI review notes; published documentation lives in docs/
+UI_REDESIGN_REVIEW.md
+UI_REDESIGN_IMPLEMENTATION.md
+
+# Minecraft test instances (including version-specific projects)
+clientGameTest/
+serverGameTest/
+debug/
+screenshots/
+!screenshot/

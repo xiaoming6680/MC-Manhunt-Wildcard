@@ -1,6 +1,7 @@
 package com.xiaoming.hunterwildcard.mixin.client;
 
 import com.xiaoming.hunterwildcard.client.WorldTiltClient;
+import com.xiaoming.hunterwildcard.wildcard.rules.TiltFrame;
 import net.minecraft.client.render.Camera;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
@@ -17,8 +18,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(Camera.class)
 public abstract class CameraRollMixin {
-    private static final float DEGREES_TO_RADIANS = (float) (Math.PI / 180.0);
-
     @Shadow
     @Final
     private Quaternionf rotation;
@@ -37,13 +36,22 @@ public abstract class CameraRollMixin {
 
     @Inject(method = "setRotation(FF)V", at = @At("TAIL"))
     private void hunterwildcard$useGravityFrame(float yaw, float pitch, CallbackInfo ci) {
-        if (!WorldTiltClient.isFrameActive()) {
+        if (!TiltFrame.active(((Camera)(Object)this).getFocusedEntity())) {
             return;
         }
-        rotation.set(WorldTiltClient.frame())
-                .rotateYXZ(-WorldTiltClient.localYaw() * DEGREES_TO_RADIANS, WorldTiltClient.localPitch() * DEGREES_TO_RADIANS, 0.0F);
-        horizontalPlane.set(0.0F, 0.0F, 1.0F).rotate(rotation);
+        boolean inverse = Math.abs(net.minecraft.util.math.MathHelper.wrapDegrees(yaw - ((Camera)(Object)this).getFocusedEntity().getYaw())) > 90.0F;
+        var entity=((Camera)(Object)this).getFocusedEntity();
+        float[] angles=TiltFrame.localAngles(entity);
+        rotation.set(TiltFrame.rotation(entity)).rotateYXZ((float)Math.PI-(angles[0]+(inverse?180:0))*((float)Math.PI/180),-angles[1]*(inverse?-1:1)*((float)Math.PI/180),0);
+        horizontalPlane.set(0.0F, 0.0F, -1.0F).rotate(rotation);
         verticalPlane.set(0.0F, 1.0F, 0.0F).rotate(rotation);
-        diagonalPlane.set(1.0F, 0.0F, 0.0F).rotate(rotation);
+        diagonalPlane.set(-1.0F, 0.0F, 0.0F).rotate(rotation);
+    }
+    @org.spongepowered.asm.mixin.injection.ModifyArgs(method="update",at=@At(value="INVOKE",target="Lnet/minecraft/client/render/Camera;setPos(DDD)V"))
+    private void hunterwildcard$eyeOrigin(org.spongepowered.asm.mixin.injection.invoke.arg.Args args,
+            net.minecraft.world.World world,net.minecraft.entity.Entity entity,boolean third,boolean inverse,float tick) {
+        if(!TiltFrame.active(entity))return;
+        var eye=entity.getCameraPosVec(tick);
+        args.set(0,eye.x);args.set(1,eye.y);args.set(2,eye.z);
     }
 }

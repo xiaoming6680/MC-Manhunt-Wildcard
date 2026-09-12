@@ -28,18 +28,19 @@ public class ModConfig {
     private static final String FILE_NAME = "hunterwildcard.json";
 
     public int preparingSeconds = 60;
-    public int endingSeconds = 5;
-    public int compassUpdateSeconds = 5;
+    public int endingSeconds = 10;
+    public int compassUpdateSeconds = 3;
     public int hunterRespawnSeconds = 10;
-    public int wildcardIntervalSeconds = 240;
-    public int wildcardDurationSeconds = 180;
+    /** Downtime after an event ends, not the time between event starts. */
+    public int wildcardIntervalSeconds = 180;
+    public int wildcardDurationSeconds = 120;
     /** FIXED uses the single value above; RANDOM rolls between min and max every time. */
     public String wildcardIntervalMode = "FIXED";
-    public int wildcardIntervalMinSeconds = 180;
-    public int wildcardIntervalMaxSeconds = 300;
+    public int wildcardIntervalMinSeconds = 120;
+    public int wildcardIntervalMaxSeconds = 240;
     public String wildcardDurationMode = "FIXED";
-    public int wildcardDurationMinSeconds = 120;
-    public int wildcardDurationMaxSeconds = 240;
+    public int wildcardDurationMinSeconds = 90;
+    public int wildcardDurationMaxSeconds = 150;
     public int actionBarIntervalSeconds = 1;
     public int hunterRadarWarningDistance = 40;
     public int supplyDropIntervalSeconds = 60;
@@ -48,15 +49,17 @@ public class ModConfig {
     public int pearlFrenzyMaxPearls = 4;
     public int pearlFrenzyIntervalSeconds = 45;
     public int windChargeBrawlIntervalSeconds = 5;
-    public int windChargeExplosionMultiplierPercent = 180;
-    public int backroomsDurationSeconds = 240;
+    public int windChargeExplosionMultiplierPercent = 150;
+    public int backroomsDurationSeconds = 180;
     public boolean hunterPrepareBoundaryEnabled = true;
     public int hunterPrepareBoundaryRadius = 20;
     public int hunterPrepareBoundaryWarnDistance = 3;
     public boolean runnerDeathNoDrops = false;
     public boolean hunterDeathNoDrops = false;
     public boolean piglinPearlBoostEnabled = true;
-    public int piglinPearlChancePercent = 40;
+    public int piglinPearlChancePercent = 20;
+    public boolean blazeRodChanceEnabled = false;
+    public int blazeRodChancePercent = 50;
     public int hunterDamageMultiplierPercent = 100;
     public int hunterSpeedPercent = 100;
     public int runnerSpeedPercent = 100;
@@ -70,11 +73,11 @@ public class ModConfig {
     public boolean randomRespawnEnabled = true;
     /** Minimum distance from the death point; the maximum is twice this. */
     public int runnerRespawnDistance = 150;
-    public int hunterRespawnDistance = 50;
+    public int hunterRespawnDistance = 64;
     /** A respawning hunter is placed at least this far from every runner (best effort). */
-    public int hunterRespawnRunnerClearance = 200;
+    public int hunterRespawnRunnerClearance = 96;
     /** Extra respawn seconds per previous hunter death this round (capped at 60 extra). */
-    public int hunterRespawnPenaltySeconds = 5;
+    public int hunterRespawnPenaltySeconds = 3;
     /** Vanilla locator bar stays on during a round but only shows players of your own side. */
     public boolean locatorBarTeamOnly = true;
     /** Survive-time rounds put a square world border of this radius (blocks from spawn) around the arena. */
@@ -85,7 +88,7 @@ public class ModConfig {
     public String runnerWinMode = "ANY_ENABLED";
     public boolean enableDragonWin = true;
     public boolean enableSurviveTimeWin = false;
-    public int surviveTimeSeconds = 2700;
+    public int surviveTimeSeconds = 900;
     public boolean enableReachLocationWin = false;
     public String targetDimension = "minecraft:overworld";
     public int targetX = 0;
@@ -99,7 +102,8 @@ public class ModConfig {
     public String hunterRespawnMode = "INFINITE";
     public int hunterLives = 0;
     public String runnerRespawnMode = "LIMITED_LIVES";
-    public int runnerLives = 1;
+    /** Three total lives leave room for wildcard accidents while deaths still cost inventory. */
+    public int runnerLives = 3;
     public int runnerRespawnSeconds = 10;
     public String runnerTeamLossMode = "ALL_RUNNERS_OUT";
     public String hunterVictoryType = "RUNNERS_OUT";
@@ -236,6 +240,7 @@ public class ModConfig {
         hunterPrepareBoundaryRadius = clampPositive(hunterPrepareBoundaryRadius);
         hunterPrepareBoundaryWarnDistance = Math.max(0, hunterPrepareBoundaryWarnDistance);
         piglinPearlChancePercent = Math.max(0, Math.min(100, piglinPearlChancePercent));
+        blazeRodChancePercent = Math.max(0, Math.min(100, blazeRodChancePercent));
         hunterDamageMultiplierPercent = Math.max(1, Math.min(1000, hunterDamageMultiplierPercent));
         hunterSpeedPercent = Math.max(10, Math.min(500, hunterSpeedPercent));
         runnerSpeedPercent = Math.max(10, Math.min(500, runnerSpeedPercent));
@@ -298,6 +303,8 @@ public class ModConfig {
         hunterDeathNoDrops = other.hunterDeathNoDrops;
         piglinPearlBoostEnabled = other.piglinPearlBoostEnabled;
         piglinPearlChancePercent = other.piglinPearlChancePercent;
+        blazeRodChanceEnabled = other.blazeRodChanceEnabled;
+        blazeRodChancePercent = other.blazeRodChancePercent;
         hunterDamageMultiplierPercent = other.hunterDamageMultiplierPercent;
         hunterSpeedPercent = other.hunterSpeedPercent;
         runnerSpeedPercent = other.runnerSpeedPercent;
@@ -364,6 +371,8 @@ public class ModConfig {
         hunterDeathNoDrops = other.hunterDeathNoDrops;
         piglinPearlBoostEnabled = other.piglinPearlBoostEnabled;
         piglinPearlChancePercent = other.piglinPearlChancePercent;
+        blazeRodChanceEnabled = other.blazeRodChanceEnabled;
+        blazeRodChancePercent = other.blazeRodChancePercent;
         hunterDamageMultiplierPercent = other.hunterDamageMultiplierPercent;
         hunterSpeedPercent = other.hunterSpeedPercent;
         runnerSpeedPercent = other.runnerSpeedPercent;

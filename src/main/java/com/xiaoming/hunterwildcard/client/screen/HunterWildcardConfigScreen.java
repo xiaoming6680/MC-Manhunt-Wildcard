@@ -1,6 +1,8 @@
 package com.xiaoming.hunterwildcard.client.screen;
 
 import com.xiaoming.hunterwildcard.client.ClientGameStatus;
+import com.xiaoming.hunterwildcard.client.ui.ConfigDraft;
+import static com.xiaoming.hunterwildcard.client.ui.RuleFields.*;
 import com.xiaoming.hunterwildcard.client.hud.WildcardIcons;
 import com.xiaoming.hunterwildcard.client.HunterWildcardClientText;
 import com.xiaoming.hunterwildcard.client.screen.widget.DropdownWidget;
@@ -73,7 +75,8 @@ public class HunterWildcardConfigScreen extends Screen {
     private static final long TOAST_FADE_IN_MS = 140L;
     private static final long TOAST_HOLD_MS = 1800L;
     private static final long TOAST_FADE_OUT_MS = 220L;
-    private static ConfigSnapshot cachedEditableConfig;
+    private boolean draggingScroll;
+    private double scrollGrab;
 
     private final List<Label> labels = new ArrayList<>();
     private final List<WrappedLabel> wrappedLabels = new ArrayList<>();
@@ -82,7 +85,12 @@ public class HunterWildcardConfigScreen extends Screen {
     /** Every widget that lives inside the scrolling content area; moved on scroll instead of rebuilt. */
     private final List<ClickableWidget> contentWidgets = new ArrayList<>();
     private int builtScroll;
+    private final List<NavigationEntry> navigationEntries = new ArrayList<>();
+    private record NavigationEntry(StyledButtonWidget button, Page page, RulesSubPage sub) {}
+    private float rulesExpansion;
+    private long rulesAnimationFrame;
     private boolean syncRebuildPending;
+    private HunterWildcardPackets.RoundDetailsPayload displayedDetails;
     private final Map<NumberField, TextFieldWidget> numberFields = new EnumMap<>(NumberField.class);
     private final Map<StringField, TextFieldWidget> stringFields = new EnumMap<>(StringField.class);
     private final Map<DropdownField, DropdownWidget> dropdownFields = new EnumMap<>(DropdownField.class);
@@ -92,9 +100,15 @@ public class HunterWildcardConfigScreen extends Screen {
     private final Map<NumberField, String> pendingNumberText = new EnumMap<>(NumberField.class);
     private final Map<StringField, String> pendingStringText = new EnumMap<>(StringField.class);
 
+    private boolean confirmStop;
     private Page currentPage = Page.GAME;
     /** Open RULES sub-page, or null while the hub is shown. Per-instance: resets whenever the screen is reopened. */
     private RulesSubPage rulesSubPage;
+    private boolean overviewReadOnly;
+    private String hoveredNavigation = "";
+    private long navigationSoundAt;
+    private final Map<String, NavigationAnimation> navigationAnimations = new HashMap<>();
+    private static final class NavigationAnimation {float hover;long frameAt;}
     /** Text field that had keyboard focus before the last rebuild; restored after {@link #init()}. */
     private Object focusedInputKey;
     private int focusedCursor = -1;
@@ -124,10 +138,20 @@ public class HunterWildcardConfigScreen extends Screen {
     private boolean manualReloadRequested;
     private boolean manualSaveRequested;
     private StyledButtonWidget saveButton;
+    private StyledButtonWidget changesLink;
+    private final java.util.List<InfoHint> infoHints=new java.util.ArrayList<>();
+    private record InfoHint(int x,int y,String tooltip) {}
     private ToggleField selectedWildcardSettings;
+    private boolean advancedItemId;
+    private String wildcardQuery="";
+    private boolean searchRebuild;
+    private TextFieldWidget wildcardSearch;
 
     public HunterWildcardConfigScreen() {
         super(Text.translatable(HunterWildcardText.key("screen.title")));
+        editableConfig = ConfigDraft.value;
+        for (NumberField f : NumberField.values()) if (ConfigDraft.raw.containsKey(f.name())) pendingNumberText.put(f, ConfigDraft.raw.get(f.name()));
+        for (StringField f : StringField.values()) if (ConfigDraft.raw.containsKey(f.name())) pendingStringText.put(f, ConfigDraft.raw.get(f.name()));
     }
 
     private static String key(String path) {
@@ -156,33 +180,38 @@ public class HunterWildcardConfigScreen extends Screen {
     public static void receiveOperationResult(OperationResultPayload payload) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.currentScreen instanceof HunterWildcardConfigScreen screen) {
-            if (payload.success()) {
-                cachedEditableConfig = null;
-                screen.showToast(payload.message(), StatusKind.SUCCESS);
-            } else {
-                screen.showToast(payload.message(), StatusKind.ERROR);
+            if (payload.requestId() != 0) {
+                screen.manualSaveRequested = ConfigDraft.pendingId != 0;
+                screen.editableConfig = ConfigDraft.value;
+                if (payload.success()) { screen.pendingNumberText.clear(); screen.pendingStringText.clear(); }
             }
+            screen.showToast(payload.message(), payload.success() ? StatusKind.SUCCESS : StatusKind.ERROR);
+            screen.clearAndInit();
         }
     }
 
     public static void closeFromServer() {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.currentScreen instanceof HunterWildcardConfigScreen) {
-            client.setScreen(null);
+            ((HunterWildcardConfigScreen) client.currentScreen).close();
         }
     }
 
     @Override
     protected void init() {
+        displayedDetails = ClientGameStatus.details;
         captureInputState();
+        syncRebuildPending = false;
+        if (canManage && editableConfig != null && ConfigDraft.pendingId == 0) ConfigDraft.value = editableConfig;
         labels.clear();
         wrappedLabels.clear();
         boxes.clear();
-        icons.clear();
+        icons.clear();infoHints.clear();
         numberFields.clear();
         stringFields.clear();
         dropdownFields.clear();
-        saveButton = null;
+        wildcardSearch = null;
+        saveButton = null;changesLink=null;
 
         Layout layout = layout();
         contentWidgets.clear();
@@ -198,6 +227,8 @@ public class HunterWildcardConfigScreen extends Screen {
             case RULES -> buildRulesPage(layout);
             case WILDCARD -> buildWildcardPage(layout);
             case DEBUG -> buildDebugPage(layout);
+            case CHANGES -> buildChangesPage(layout);
+            case RESULT -> buildResultPage(layout);
         }
 
         updateMaxScroll(layout);
@@ -206,6 +237,8 @@ public class HunterWildcardConfigScreen extends Screen {
             return;
         }
 
+        if (canEditConfig() && ((currentPage==Page.RULES && rulesSubPage!=null) || (currentPage==Page.WILDCARD && selectedWildcardSettings!=null)))
+            addButton(layout.contentX()+layout.usableContentWidth()-76,layout.panelY()+28,76,16,key("ui.defaults.page"),"",b->restoreDefaultConfig(),ButtonVariant.LINK,true);
         buildFooter(layout);
         builtScroll = renderedScroll;
         updateContentWidgetVisibility(layout);
@@ -307,7 +340,7 @@ public class HunterWildcardConfigScreen extends Screen {
             return rulesSubPage.description;
         }
         if (currentPage == Page.WILDCARD && selectedWildcardSettings != null) {
-            return key("screen.page.wildcard_settings.description");
+            return selectedWildcardSettings.description;
         }
         return currentPage.description;
     }
@@ -334,6 +367,7 @@ public class HunterWildcardConfigScreen extends Screen {
     @Override
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         Layout layout = layout();
+        updateNavigationLayout(layout);
         updateSmoothScroll(layout, delta);
         int scrollDelta = renderedScroll - builtScroll;
         if (scrollDelta != 0) {
@@ -343,29 +377,33 @@ public class HunterWildcardConfigScreen extends Screen {
         }
 
         context.fill(0, 0, width, height, 0x88000000);
-        context.fill(layout.panelX(), layout.panelY(), layout.panelX() + layout.panelWidth(), layout.panelY() + layout.panelHeight(), 0xD0161B22);
-        context.fill(layout.panelX(), layout.panelY(), layout.panelX() + layout.navWidth(), layout.panelY() + layout.panelHeight(), 0xE01E252D);
+        context.fill(layout.panelX(), layout.panelY(), layout.panelX() + layout.panelWidth(), layout.panelY() + layout.panelHeight(), 0xF512161C);
+        context.fill(layout.panelX(), layout.panelY(), layout.panelX() + layout.navWidth(), layout.panelY() + layout.panelHeight(), 0xFF171D25);
         context.fill(layout.panelX() + layout.navWidth(), layout.panelY(), layout.panelX() + layout.navWidth() + 1, layout.panelY() + layout.panelHeight(), 0xFF35404B);
 
-        context.drawText(textRenderer, text(key("screen.title")), layout.panelX() + 12, layout.panelY() + 13, 0xFFFFFFFF, true);
+        context.drawText(textRenderer, Text.literal("MANHUNT"), layout.panelX() + 10, layout.panelY() + 10, 0xFFE8EDF2, true);
+        context.drawText(textRenderer, Text.literal("WILDCARD"), layout.panelX()+10,layout.panelY()+23,0xFFB99AFF,false);
         int headerX = hasOpenSubPage() ? layout.contentX() + 24 : layout.contentX();
-        int headerWidth = Math.max(20, layout.usableContentWidth() - (headerX - layout.contentX()));
+        int headerWidth = Math.max(20, layout.usableContentWidth() - (headerX - layout.contentX()) - ((currentPage == Page.RULES && rulesSubPage != null || currentPage == Page.WILDCARD && selectedWildcardSettings != null) && canManage ? 80 : 0));
         context.drawText(textRenderer, Text.literal(trim(tr(headerTitle()), headerWidth)), headerX, layout.panelY() + 14, 0xFFFFFFFF, true);
         context.drawText(textRenderer, Text.literal(trim(tr(headerDescription()), headerWidth)), headerX, layout.panelY() + 29, 0xFF9FAAB4, false);
 
         context.enableScissor(layout.contentX(), layout.viewportTop(), layout.contentX() + layout.usableContentWidth(), layout.viewportBottom());
         for (Box box : boxes) {
             context.fill(box.x, box.y, box.x + box.width, box.y + box.height, box.color);
-            context.fill(box.x, box.y, box.x + box.width, box.y + 1, box.borderColor);
+            context.fill(box.x, box.y, box.x + 2, box.y + box.height, box.borderColor);
             context.fill(box.x, box.y + box.height - 1, box.x + box.width, box.y + box.height, box.borderColor);
-            context.fill(box.x, box.y, box.x + 1, box.y + box.height, box.borderColor);
-            context.fill(box.x + box.width - 1, box.y, box.x + box.width, box.y + box.height, box.borderColor);
+
+
         }
 
         for (Label label : labels) {
             context.drawText(textRenderer, Text.literal(trim(tr(label.text), label.maxWidth(layout))), label.x, label.y, label.color, label.shadow);
         }
         for (WrappedLabel label : wrappedLabels) {
+            if (label.text().equals(key("ui.preset.hint"))) {
+                label = new WrappedLabel(presetDescriptionAt(mouseX, mouseY), label.x(), label.y(), label.height(), label.color(), label.shadow(), label.width(), label.maxLines());
+            }
             renderWrappedLabel(context, layout, label);
         }
         for (Icon icon : icons) {
@@ -374,10 +412,14 @@ public class HunterWildcardConfigScreen extends Screen {
         context.disableScissor();
 
         renderFooterStatus(context, layout);
+        renderInputErrors(context);
         renderScrollBar(context, layout);
         renderNavigationScrollBar(context, layout);
+        updateNavigationFeedback(mouseX,mouseY);
 
         hoverTooltip = "";
+        for(InfoHint hint:infoHints)if(isInsideContent(layout,mouseX,mouseY) && mouseX>=hint.x && mouseX<hint.x+14 && mouseY>=hint.y && mouseY<hint.y+20)setHoverTooltip(hint.tooltip,mouseX,mouseY);
+        if(changesLink!=null)changesLink.setMessage(text(spec("ui.changes.count",changeCount())));
         if (saveButton != null) {
             saveButton.active = canSaveConfig();
         }
@@ -402,6 +444,13 @@ public class HunterWildcardConfigScreen extends Screen {
     public boolean mouseClicked(Click click, boolean doubled) {
         double mouseX = click.x();
         double mouseY = click.y();
+        Layout sl = layout();
+        if (click.button() == 0 && maxScroll > 0 && Math.abs(mouseX - sl.scrollBarX()) < 7
+                && mouseY >= sl.viewportTop() && mouseY <= sl.viewportBottom()) {
+            draggingScroll = true;
+            dragScroll(mouseY);
+            return true;
+        }
 
         for (DropdownWidget dropdown : dropdownFields.values()) {
             if (dropdown.isExpanded() && dropdown.containsPoint(mouseX, mouseY)) {
@@ -438,6 +487,26 @@ public class HunterWildcardConfigScreen extends Screen {
             ensureFocusedInputVisible(layout());
         }
         return handled;
+    }
+
+    private void dragScroll(double y) {
+        Layout l = layout();
+        float ratio = (float) ((y - l.viewportTop()) / Math.max(1, l.viewportHeight()));
+        targetScrollOffset = scrollOffset = clamp(ratio * maxScroll, 0, maxScroll);
+        rememberCurrentScroll(); clearAndInit();
+    }
+    @Override public boolean mouseDragged(Click click, double dx, double dy) {
+        if (draggingScroll) { dragScroll(click.y()); return true; }
+        return super.mouseDragged(click, dx, dy);
+    }
+    @Override public boolean mouseReleased(Click click) {
+        draggingScroll = false; return super.mouseReleased(click);
+    }
+    @Override public boolean keyPressed(net.minecraft.client.input.KeyInput input) {
+        for (DropdownWidget dropdown : dropdownFields.values())
+            if (dropdown.isExpanded() && dropdown.keyPressed(input)) return true;
+        if (input.key() == 256 && hasOpenSubPage()) { closeSubPage(); return true; }
+        return super.keyPressed(input);
     }
 
     @Override
@@ -482,10 +551,12 @@ public class HunterWildcardConfigScreen extends Screen {
 
     @Override
     public void close() {
-        // Closing is never blocked: invalid text is reverted by commitVisibleInputs, then we leave.
-        if (isConfigEditPage() && editableConfig != null) {
-            commitVisibleInputs();
-            cachedEditableConfig = editableConfig;
+        // Preserve raw input as well as committed values for this connection.
+        if (editableConfig != null && canManage) {
+            ConfigDraft.value = editableConfig;
+            ConfigDraft.raw.clear();
+            pendingNumberText.forEach((f, v) -> ConfigDraft.raw.put(f.name(), v));
+            pendingStringText.forEach((f, v) -> ConfigDraft.raw.put(f.name(), v));
         }
 
         closeDropdowns();
@@ -494,6 +565,10 @@ public class HunterWildcardConfigScreen extends Screen {
 
     @Override
     public void tick() {
+        if (manualSaveRequested && ConfigDraft.pendingId == 0) {manualSaveRequested=false;showError(ConfigDraft.message);clearAndInit();}
+        if(searchRebuild){searchRebuild=false;int cursor=wildcardSearch==null?0:wildcardSearch.getCursor();clearAndInit();if(wildcardSearch!=null){setFocused(wildcardSearch);wildcardSearch.setCursor(cursor,false);}}
+        if (syncRebuildPending && !hasFocusedTextField() && !hasExpandedDropdown()) clearAndInit();
+
         int refreshInterval = refreshIntervalTicks();
         if (refreshInterval <= 0) {
             refreshTicks = 0;
@@ -508,6 +583,7 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private int refreshIntervalTicks() {
+        if (ConfigDraft.pendingId != 0) return 40;
         if (isRealtimeStatusPage()) {
             return REALTIME_REFRESH_TICKS;
         }
@@ -523,111 +599,115 @@ public class HunterWildcardConfigScreen extends Screen {
         return currentPage == Page.GAME || currentPage == Page.DEBUG;
     }
 
-    private void buildNavigation(Layout layout) {
-        int x = layout.panelX() + 10;
-        int navTop = navigationTop(layout);
-        int navBottom = navigationBottom(layout);
-        int buttonHeight = 24;
-        int buttonGap = 6;
-        updateNavigationScroll(layout);
-        int y = navTop - Math.round(navScroll);
-        for (Page page : visiblePages()) {
-            if (y + buttonHeight < navTop || y > navBottom) {
-                y += buttonHeight + buttonGap;
-                continue;
-            }
-
-            StyledButtonWidget button = new StyledButtonWidget(
-                    x,
-                    y,
-                    layout.navWidth() - 20,
-                    buttonHeight,
-                    page.label,
-                    "",
-                    widget -> switchPage(page),
-                    page == currentPage ? ButtonVariant.SELECTED : ButtonVariant.NORMAL
-            );
-            button.active = true;
-            addDrawableChild(button);
-            y += buttonHeight + buttonGap;
+    private void updateNavigationFeedback(int mouseX,int mouseY) {
+        String hovered="";
+        for(var child:children())if(child instanceof StyledButtonWidget button && button.visible && (button.variant==ButtonVariant.NAV || button.variant==ButtonVariant.NAV_SELECTED) && button.isMouseOver(mouseX,mouseY)){hovered=button.getMessage().getString();break;}
+        long now=System.currentTimeMillis();
+        if(!hovered.isEmpty() && !hovered.equals(hoveredNavigation) && now-navigationSoundAt>=90){
+            client.getSoundManager().play(net.minecraft.client.sound.PositionedSoundInstance.ui(net.minecraft.sound.SoundEvents.UI_BUTTON_CLICK.value(),1.6F,0.12F));navigationSoundAt=now;
         }
+        hoveredNavigation=hovered;
+    }
+
+    private void buildNavigation(Layout l) {
+        navigationEntries.clear();
+        int x=l.panelX()+8, w=l.navWidth()-16;
+        for(Page page:visiblePages()) {
+            var button=addButton(x,0,w,24,page.label,"",b->switchPage(page),page==currentPage?ButtonVariant.NAV_SELECTED:ButtonVariant.NAV,true);
+            navigationEntries.add(new NavigationEntry(button,page,null));
+            if(page==Page.RULES) for(RulesSubPage sub:RulesSubPage.values()) {
+                var child=addButton(x+4,0,w-4,20,key("ui.nav."+sub.name().toLowerCase(java.util.Locale.ROOT)),sub.description,b->openRulesSubPage(sub),currentPage==Page.RULES && rulesSubPage==sub?ButtonVariant.NAV_SELECTED:ButtonVariant.NAV,true);
+                navigationEntries.add(new NavigationEntry(child,page,sub));
+            }
+        }
+        updateNavigationLayout(l);
+    }
+
+    public float rulesExpansionForTesting() { return rulesExpansion; }
+
+    private void updateNavigationLayout(Layout l) {
+        long now=System.nanoTime();
+        float elapsed=rulesAnimationFrame==0?0:(now-rulesAnimationFrame)/1_000_000_000F;
+        rulesAnimationFrame=now;
+        float target=currentPage==Page.RULES?1:0;
+        rulesExpansion=com.xiaoming.hunterwildcard.client.ui.DisplayPreferences.get.reducedMotion?target:rulesExpansion+(target-rulesExpansion)*(1-(float)Math.exp(-Math.min(elapsed,.1F)*18));
+        if(Math.abs(rulesExpansion-target)<.002F)rulesExpansion=target;
+        float y=navigationTop(l)-navScroll;
+        for(var entry:navigationEntries) {
+            var button=entry.button();
+            button.setY(Math.round(y));
+            button.visible=y>=navigationTop(l)-button.getHeight() && y+button.getHeight()<=navigationBottom(l)
+                    && (entry.sub()==null || rulesExpansion>.05F);
+            button.active=entry.sub()==null || (currentPage==Page.RULES && rulesExpansion>.95F);
+            button.navigationReveal=entry.sub()==null?1:rulesExpansion;
+            y+=entry.sub()==null?30:24*rulesExpansion;
+        }
+        maxNavScroll=Math.max(0,y+navScroll-navigationBottom(l));
     }
 
     private void buildGamePage(Layout layout) {
-        int x = layout.contentX();
-        int y = pageTop(layout);
-        int w = layout.usableContentWidth();
-
-        if (serverSync == null) {
-            CardBuilder card = addCard(layout, x, layout.contentY(), w, key("screen.card.game_status"));
-            card.hint(key("screen.hint.waiting_server_sync"));
-            markContentBottom(layout, card.finish());
-            return;
-        }
-
+        int x = layout.contentX(), y = pageTop(layout), w = layout.usableContentWidth();
+        if (serverSync == null) { CardBuilder c = addCard(layout,x,y,w,key("screen.card.game_status")); c.hint(key("screen.hint.waiting_server_sync")); markContentBottom(layout,c.finish()); return; }
         boolean waiting = serverSync.gameState() == GameState.WAITING;
-        String startTooltip = startGameTooltip(waiting);
-        int currentY = addTeamManagementCard(layout, x, y, w);
-        currentY = addGameActionRow(layout, x, currentY, w, waiting, startTooltip);
-        currentY = addStatusPills(layout, x, currentY, w, List.of(
-                new StatusBlock(key("screen.status.identity"), serverSync.playerRole(), serverSync.playerInTeam() ? 0xFFFFFFFF : 0xFFFFD966),
-                new StatusBlock(key("screen.status.permission"), serverSync.canManage() ? key("screen.permission.op") : key("screen.permission.normal"), serverSync.canManage() ? 0xFF77E287 : 0xFFC9D4DE),
-                new StatusBlock(key("role.hunter"), spec("screen.count.players", serverSync.hunterCount()), serverSync.hunterCount() > 0 ? 0xFF77E287 : 0xFFFFD966),
-                new StatusBlock(key("role.runner"), spec("screen.count.players", serverSync.runnerCount()), serverSync.runnerCount() > 0 ? 0xFF77E287 : 0xFFFFD966),
-                new StatusBlock(key("screen.status.wildcard"), compactWildcardDisplayName(), serverSync.activeWildcardRunning() ? 0xFF7FC2FF : 0xFFC9D4DE)
-        ));
-
-        ConfigSnapshot summaryConfig = serverSync.config();
-        currentY = addTwoColumnCards(
-                layout,
-                x,
-                currentY,
-                w,
-                MEDIUM_CARD_MAX_WIDTH,
-                key("screen.card.current_game"),
-                card -> {
-                    card.info(key("screen.field.state"), waiting ? key("state.waiting") : stateName(serverSync.gameState()), stateColor(serverSync.gameState()));
-                    card.info(key("screen.field.my_team"), serverSync.playerRole(), serverSync.playerInTeam() ? 0xFFFFFFFF : 0xFFFFD966);
-                    if (waiting) {
-                        card.info(key("screen.field.start_condition"), startConditionDisplay(startTooltip), startTooltip.isBlank() ? 0xFF77E287 : 0xFFFFD966);
-                    } else {
-                        card.info(key("screen.field.current_wildcard"), wildcardDisplayName(), serverSync.activeWildcardRunning() ? 0xFF7FC2FF : 0xFFC9D4DE);
-                        card.info(key("screen.field.next_wildcard"), formatSeconds(serverSync.nextWildcardSeconds()), 0xFF7FC2FF);
-                    }
-                },
-                key("screen.card.rules_summary"),
-                card -> {
-                    card.info(key("hud.status.runner_win"), runnerWinSummary(summaryConfig), 0xFFFFFFFF);
-                    card.info(key("hud.status.hunter_win"), hunterWinSummary(summaryConfig), 0xFFFFFFFF);
-                    card.info(key("hud.status.hunter_respawn"), respawnSummary(summaryConfig.hunterRespawnMode(), summaryConfig.hunterLives(), RespawnMode.INFINITE), 0xFFFFFFFF);
-                    card.info(key("hud.status.runner_respawn"), respawnSummary(summaryConfig.runnerRespawnMode(), summaryConfig.runnerLives(), RespawnMode.LIMITED_LIVES), 0xFFFFFFFF);
-                }
-        );
-
-        markContentBottom(layout, currentY);
-    }
-
-    private int addGameActionRow(Layout layout, int x, int currentY, int w, boolean waiting, String startTooltip) {
-        List<ButtonSpec> actions = new ArrayList<>();
         if (waiting) {
-            if (canManage) {
-                actions.add(new ButtonSpec(key("screen.button.start_game"), widget -> sendGameAction(GameAction.START_GAME), ButtonVariant.PRIMARY, startTooltip.isBlank(), startTooltip));
-            }
+            y = addTwoColumnCards(layout,x,y,w,MEDIUM_CARD_MAX_WIDTH,key("team.hunters"),c -> lobbyTeamCard(c,PlayerRole.HUNTER),key("team.runners"),c -> lobbyTeamCard(c,PlayerRole.RUNNER));
+            CardBuilder summary = addCard(layout,x,y,w,key("screen.card.rules_summary"));
+            summary.info(key("team.runners"),runnerWinSummary(serverSync.config()),0xFF78B8FA);
+            summary.info(key("team.hunters"),hunterWinSummary(serverSync.config()),0xFFEF7181);
+            summary.inlineAction(key("ui.rules.open"),b -> switchPage(Page.RULES),ButtonVariant.LINK,true,100);
+            summary.endActions();
+            y = summary.finish();
         } else {
-            boolean hudShown = ClientGameStatus.isStatusHudToggled();
-            actions.add(new ButtonSpec(
-                    hudShown ? key("screen.button.hide_status_hud") : key("screen.button.show_status_hud"),
-                    widget -> toggleStatusHud(),
-                    hudShown ? ButtonVariant.TOGGLE_ON : ButtonVariant.NORMAL,
-                    true,
-                    key("screen.tooltip.status_hud")
-            ));
+            CardBuilder status = addCard(layout,x,y,w,stateName(serverSync.gameState()));
+            if (serverSync.gameState() == GameState.PREPARING) status.hint(spec("ui.release_in", formatSeconds(serverSync.phaseRemainingSeconds())));
+            if (ClientGameStatus.details != null) {
+                var d = ClientGameStatus.details;
+                status.hint(d.objective()); status.hint(d.hunterObjective());
+                status.info(key("screen.field.my_team"),serverSync.playerRole(),0xFFE8EDF2);
+                status.info(key("ui.member.status"),d.ownState(),0xFFF0C76B);
+                status.info(key("ui.lives"),d.ownLives()==-2 ? "—" : d.ownLives()<0 ? key("common.infinite") : Integer.toString(d.ownLives()),0xFFE8EDF2);
+            }
+            status.info(key("screen.field.current_wildcard"),wildcardDisplayName(),0xFFB99AFF);
+            status.info(key("screen.field.remaining"),formatSeconds(serverSync.activeWildcardRunning()?serverSync.activeWildcardRemainingSeconds():serverSync.nextWildcardSeconds()),0xFFB99AFF);
+            y = status.finish()+CARD_GAP;
+            y = addTwoColumnCards(layout,x,y,w,MEDIUM_CARD_MAX_WIDTH,key("team.hunters"),c -> rosterCard(c,PlayerRole.HUNTER),key("team.runners"),c -> rosterCard(c,PlayerRole.RUNNER));
         }
-        if (!actions.isEmpty()) {
-            currentY = addButtonRow(layout, actions, x, currentY, w, actions.size(), 240) - ROW_GAP + CARD_GAP;
+        if (ClientGameStatus.details != null && !ClientGameStatus.details.reason().isBlank()) {
+            y = addButtonRow(layout,List.of(new ButtonSpec(key("ui.result"),b->switchPage(Page.RESULT),ButtonVariant.NORMAL,true)),x,y+8,w,1,160);
         }
-        return currentY;
+        markContentBottom(layout,y);
     }
+
+    private void lobbyTeamCard(CardBuilder card,PlayerRole role) {
+        boolean current=serverSync.playerRole().equals(role.getTranslationKey());
+        card.button(key(current?"screen.team.leave":role==PlayerRole.HUNTER?"screen.team.join_hunter":"screen.team.join_runner"),b->sendTeamAction(current?TeamAction.LEAVE:role==PlayerRole.HUNTER?TeamAction.JOIN_HUNTER:TeamAction.JOIN_RUNNER),current?ButtonVariant.DANGER:role==PlayerRole.HUNTER?ButtonVariant.TEAM_HUNTER:ButtonVariant.TEAM_RUNNER,true,112);
+        if(current)card.hint(key("screen.team.current_side"));
+        rosterCard(card,role);
+    }
+
+    private void rosterCard(CardBuilder card, PlayerRole role) {
+        var details = ClientGameStatus.details;
+        if (details == null) { card.hint(key("screen.hint.waiting_server_sync")); return; }
+        var members = details.members().stream().filter(m -> m.role().equals(role.getTranslationKey())).toList();
+        if (members.isEmpty()) card.hint(key("ui.team.empty"));
+        for (var member : members) {
+            card.hint(tr(member.name()) + "  ·  " + tr(member.state()) + (member.respawnSeconds()>0 ? "  " + formatSeconds(member.respawnSeconds()) : member.lives()>=0 && serverSync.gameState()!=GameState.WAITING ? "  ♥ " + member.lives() : ""));
+        }
+    }
+
+    private void buildResultPage(Layout layout) {
+        CardBuilder c = addCard(layout,layout.contentX(),pageTop(layout),layout.usableContentWidth(),key("ui.result"));
+        var d = ClientGameStatus.details;
+        if (d == null || d.reason().isBlank()) c.hint(key("ui.result.empty"));
+        else {
+            c.info(key("ui.winner"),d.winner(),0xFFF0C76B); c.hint(d.reason());
+            for (var member:d.resultMembers()) c.hint(tr(member.role())+" · "+tr(member.name()));
+            c.button(key("ui.play_again"), b->switchPage(Page.GAME), ButtonVariant.PRIMARY, true,180);
+        }
+        markContentBottom(layout,c.finish());
+    }
+
+
 
     private void toggleStatusHud() {
         ClientGameStatus.toggleStatusHud();
@@ -662,30 +742,90 @@ public class HunterWildcardConfigScreen extends Screen {
 
     private void buildRulesHub(Layout layout, int x, int y, int w) {
         int currentY = y;
+        if (!isRoundRunning() && canManage) {
+            CardBuilder presets=addCard(layout,x,currentY,w,key("ui.presets"));
+            presets.buttonGrid(List.of(
+                new ButtonSpec(key("ui.preset.classic"),b->applyPreset("CLASSIC"),ButtonVariant.NORMAL,true),
+                new ButtonSpec(key("ui.preset.dragon"),b->applyPreset("DRAGON"),ButtonVariant.NORMAL,true),
+                new ButtonSpec(key("ui.preset.survive"),b->applyPreset("SURVIVE_TIME"),ButtonVariant.NORMAL,true),
+                new ButtonSpec(key("ui.preset.collect"),b->applyPreset("COLLECT_ITEM"),ButtonVariant.NORMAL,true)),w>=360?4:2,112);
+            wrappedLabels.add(new WrappedLabel(key("ui.preset.hint"),presets.contentX(),presets.cursorY,26,0xFF9FAAB4,false,presets.contentWidth(),2));
+            presets.gap(30);currentY=presets.finish()+CARD_GAP;
+        }
         if (isRoundRunning()) {
             CardBuilder note = addCard(layout, x, currentY, w, key("screen.card.live_rules"));
             note.hint(key("screen.hint.live_rules"));
             currentY = note.finish() + CARD_GAP;
         }
 
-        RulesSubPage[] subPages = RulesSubPage.values();
-        for (int i = 0; i < subPages.length; i += 2) {
-            RulesSubPage left = subPages[i];
-            if (i + 1 < subPages.length) {
-                RulesSubPage right = subPages[i + 1];
-                currentY = addTwoColumnCards(layout, x, currentY, w, LARGE_CARD_MAX_WIDTH, left.label, card -> buildRulesHubCard(card, left), right.label, card -> buildRulesHubCard(card, right));
-            } else {
-                int cardWidth = Math.min(w, LARGE_CARD_MAX_WIDTH);
-                CardBuilder card = addCard(layout, x + Math.max(0, (w - cardWidth) / 2), currentY, cardWidth, left.label);
-                buildRulesHubCard(card, left);
-                currentY = card.finish() + CARD_GAP;
-            }
+        for (RulesSubPage section : List.of(RulesSubPage.VICTORY, RulesSubPage.TIME_BOUNDARY, RulesSubPage.RESPAWN, RulesSubPage.KILL_CREDIT, RulesSubPage.BALANCE)) {
+            addContentLabel(layout,section.label,x,currentY+5,0xFFB99AFF,false);
+            addContentButton(layout,x+w-52,currentY,52,18,key(canManage?"ui.rules.adjust":"ui.view"),"",b->openRulesSubPage(section),ButtonVariant.LINK,true);
+            currentY+=24;
+            overviewReadOnly=true;
+            try {
+                currentY=switch(section) {
+                    case VICTORY -> buildVictorySubPage(layout,x,currentY,w);
+                    case TIME_BOUNDARY -> buildTimeBoundarySubPage(layout,x,currentY,w);
+                    case RESPAWN -> buildRespawnSubPage(layout,x,currentY,w);
+                    case KILL_CREDIT -> buildKillCreditSubPage(layout,x,currentY,w);
+                    case BALANCE -> buildBalanceSubPage(layout,x,currentY,w);
+                };
+            } finally {overviewReadOnly=false;}
         }
+        CardBuilder wildcards=addCard(layout,x,currentY,w,key("screen.page.wildcard"));
+        long enabled=java.util.Arrays.stream(ToggleField.values()).filter(f->getToggle(editableConfig,f)).count();
+        wildcards.hint(enabled==0?key("ui.wildcards.none"):spec("ui.wildcards.enabled_count",enabled,ToggleField.values().length));
+        if(enabled>0) {
+            String interval="RANDOM".equals(editableConfig.wildcardIntervalMode())?formatNumber(NumberField.WILDCARD_INTERVAL_MIN_SECONDS,editableConfig.wildcardIntervalMinSeconds())+"–"+formatNumber(NumberField.WILDCARD_INTERVAL_MAX_SECONDS,editableConfig.wildcardIntervalMaxSeconds()):formatNumber(NumberField.WILDCARD_INTERVAL_SECONDS,editableConfig.wildcardIntervalSeconds());
+            String duration="RANDOM".equals(editableConfig.wildcardDurationMode())?formatNumber(NumberField.WILDCARD_DURATION_MIN_SECONDS,editableConfig.wildcardDurationMinSeconds())+"–"+formatNumber(NumberField.WILDCARD_DURATION_MAX_SECONDS,editableConfig.wildcardDurationMaxSeconds()):formatNumber(NumberField.WILDCARD_DURATION_SECONDS,editableConfig.wildcardDurationSeconds());
+            wildcards.hint(spec("ui.wildcards.timing_summary",interval,duration));
+        }
+        wildcards.inlineAction(key(canManage?"ui.rules.adjust":"ui.view"),b->switchPage(Page.WILDCARD),ButtonVariant.LINK,true,52);
+        wildcards.endActions();currentY=wildcards.finish();
         markContentBottom(layout, currentY);
     }
 
+    public float navigationProgressForTesting(String title) {
+        NavigationAnimation state=navigationAnimations.get(title);return state==null?0:state.hover;
+    }
+
+    public String presetDescriptionAt(int mouseX, int mouseY) {
+        for (int pass=0;pass<2;pass++) for (var child : children()) if (child instanceof ButtonWidget button && button.visible && (pass==0 ? button.isMouseOver(mouseX, mouseY) : button.isFocused())) {
+            for (String preset : List.of("classic", "dragon", "survive", "collect")) {
+                if (button.getMessage().getString().equals(tr(key("ui.preset." + preset)))) return key("ui.preset." + preset + ".description");
+            }
+        }
+        return key("ui.preset.hint");
+    }
+
+    private void applyPreset(String type) {
+        if (!canEditConfig() || isRoundRunning()) return;
+        commitVisibleInputs();
+        if(type.equals("CLASSIC")) {
+            ModConfig classic=editableConfig.toConfig();
+            classic.runnerVictoryType="DRAGON";classic.hunterVictoryType="RUNNERS_OUT";
+            classic.runnerRespawnMode="NO_RESPAWN";classic.runnerLives=1;classic.runnerTeamLossMode="ANY_RUNNER_OUT";
+            classic.hunterRespawnMode="INFINITE";classic.hunterRespawnSeconds=1;classic.hunterRespawnPenaltySeconds=0;
+            classic.preparingSeconds=1;classic.hunterPrepareBoundaryEnabled=false;classic.surviveBorderEnabled=false;
+            classic.randomRespawnEnabled=false;classic.runnerDeathNoDrops=false;classic.hunterDeathNoDrops=false;
+            classic.hunterDamageMultiplierPercent=100;classic.hunterSpeedPercent=100;classic.runnerSpeedPercent=100;
+            classic.piglinPearlBoostEnabled=false;classic.blazeRodChanceEnabled=false;classic.compassUpdateSeconds=1;
+            for(ToggleField field:ToggleField.values())classic.enabledWildcards.put(field.id,false);
+            classic.validate();editableConfig=ConfigSnapshot.from(classic);ConfigDraft.value=editableConfig;openRulesSubPage(null);return;
+        }
+        editableConfig=setDropdownValue(editableConfig,DropdownField.RUNNER_VICTORY_TYPE,type);
+        editableConfig=setDropdownValue(editableConfig,DropdownField.HUNTER_VICTORY_TYPE,"RUNNERS_OUT");
+        editableConfig=setDropdownValue(editableConfig,DropdownField.HUNTER_RESPAWN_MODE,"INFINITE");
+        editableConfig=setDropdownValue(editableConfig,DropdownField.RUNNER_RESPAWN_MODE,"LIMITED_LIVES");
+        editableConfig=setNumber(editableConfig,NumberField.RUNNER_LIVES,3);
+        if(type.equals("SURVIVE_TIME")) {editableConfig=setNumber(editableConfig,NumberField.SURVIVE_TIME_SECONDS,900);editableConfig=setBoolean(editableConfig,BooleanField.SURVIVE_BORDER_ENABLED,true);}
+        if(type.equals("COLLECT_ITEM")) {editableConfig=setString(editableConfig,StringField.TARGET_ITEM_ID,"minecraft:diamond");editableConfig=setNumber(editableConfig,NumberField.TARGET_ITEM_COUNT,16);}
+        ConfigDraft.value=editableConfig;openRulesSubPage(null);
+    }
+
     private void buildRulesHubCard(CardBuilder card, RulesSubPage subPage) {
-        card.titleButtons(List.of(new ButtonSpec(key("screen.button.edit"), widget -> openRulesSubPage(subPage), ButtonVariant.PRIMARY, true, subPage.description)), 60);
+        card.titleButtons(List.of(new ButtonSpec(key(canManage ? "screen.button.edit" : "ui.view"), widget -> openRulesSubPage(subPage), ButtonVariant.PRIMARY, true, subPage.description)), 60);
         card.hint(rulesSummary(subPage));
     }
 
@@ -706,14 +846,21 @@ public class HunterWildcardConfigScreen extends Screen {
         };
     }
 
+    private String readableTime(int seconds) {
+        return seconds%60==0?tr(spec("ui.time.minutes",seconds/60)):seconds<60?tr(spec("ui.time.seconds",seconds)):tr(spec("ui.time.minutes_seconds",seconds/60,seconds%60));
+    }
+    private String itemName(String raw) {
+        var id=net.minecraft.util.Identifier.tryParse(raw);
+        return id==null?raw:net.minecraft.registry.Registries.ITEM.get(id).getName().getString();
+    }
     private String runnerWinSummary(ConfigSnapshot config) {
         RunnerVictoryType type = RunnerVictoryType.fromConfig(config.runnerVictoryType(), RunnerVictoryType.DRAGON);
         String base = tr(type.getTranslationKey());
         return switch (type) {
             case DRAGON -> base;
-            case SURVIVE_TIME -> base + " " + tr(spec("hud.status.paren_seconds", config.surviveTimeSeconds()));
+            case SURVIVE_TIME -> tr(spec("ui.goal.survive", readableTime(config.surviveTimeSeconds())));
             case REACH_LOCATION -> base + " (" + config.targetX() + ", " + config.targetY() + ", " + config.targetZ() + ")";
-            case COLLECT_ITEM -> base + " (" + config.targetItemCount() + "x " + shortItemId(config.targetItemId()) + ")";
+            case COLLECT_ITEM -> tr(spec("ui.goal.collect", config.targetItemCount(), itemName(config.targetItemId())));
         };
     }
 
@@ -721,7 +868,7 @@ public class HunterWildcardConfigScreen extends Screen {
         HunterVictoryType type = HunterVictoryType.fromConfig(config.hunterVictoryType(), HunterVictoryType.RUNNERS_OUT);
         String base = tr(type.getTranslationKey());
         return type == HunterVictoryType.RUNNER_KILL_COUNT
-                ? base + " " + tr(spec("hud.status.paren_kills", config.hunterRunnerKillTarget()))
+                ? tr(spec("ui.goal.hunter_kills",config.hunterRunnerKillTarget()))
                 : base;
     }
 
@@ -739,7 +886,7 @@ public class HunterWildcardConfigScreen extends Screen {
         return colon >= 0 ? itemId.substring(colon + 1) : itemId;
     }
 
-    private void buildTimeBoundarySubPage(Layout layout, int x, int y, int w) {
+    private int buildTimeBoundarySubPage(Layout layout, int x, int y, int w) {
         int bottom = addTwoColumnCards(
                 layout,
                 x,
@@ -759,9 +906,10 @@ public class HunterWildcardConfigScreen extends Screen {
                 }
         );
         markContentBottom(layout, bottom);
+        return bottom;
     }
 
-    private void buildVictorySubPage(Layout layout, int x, int y, int w) {
+    private int buildVictorySubPage(Layout layout, int x, int y, int w) {
         RunnerVictoryType victoryType = RunnerVictoryType.fromConfig(editableConfig.runnerVictoryType(), RunnerVictoryType.DRAGON);
         HunterVictoryType hunterVictoryType = HunterVictoryType.fromConfig(editableConfig.hunterVictoryType(), HunterVictoryType.RUNNERS_OUT);
         int bottom = addTwoColumnCards(
@@ -777,9 +925,10 @@ public class HunterWildcardConfigScreen extends Screen {
                 card -> buildHunterVictoryCard(card, hunterVictoryType)
         );
         markContentBottom(layout, bottom);
+        return bottom;
     }
 
-    private void buildRespawnSubPage(Layout layout, int x, int y, int w) {
+    private int buildRespawnSubPage(Layout layout, int x, int y, int w) {
         RespawnMode hunterMode = RespawnMode.fromConfig(editableConfig.hunterRespawnMode(), RespawnMode.INFINITE);
         boolean killCountMode = isHunterKillCountMode();
         RespawnMode runnerMode = killCountMode ? RespawnMode.INFINITE : RespawnMode.fromConfig(editableConfig.runnerRespawnMode(), RespawnMode.LIMITED_LIVES);
@@ -802,7 +951,7 @@ public class HunterWildcardConfigScreen extends Screen {
                 key("screen.card.runner_respawn"),
                 card -> {
                     if (killCountMode) {
-                        card.info(key("config.dropdown.runner_respawn_mode"), key("screen.respawn.infinite_locked"), 0xFF7FC2FF);
+                        card.info(key("config.dropdown.runner_respawn_mode"), key("screen.respawn.infinite_locked"), 0xFF78B8FA);
                         card.number(NumberField.RUNNER_LIVES, false);
                         card.number(NumberField.RUNNER_RESPAWN_SECONDS, true);
                         card.hint(key("screen.hint.kill_count_runner_infinite"));
@@ -842,9 +991,10 @@ public class HunterWildcardConfigScreen extends Screen {
                 }
         );
         markContentBottom(layout, bottom);
+        return bottom;
     }
 
-    private void buildKillCreditSubPage(Layout layout, int x, int y, int w) {
+    private int buildKillCreditSubPage(Layout layout, int x, int y, int w) {
         int cardWidth = Math.min(w, LARGE_CARD_MAX_WIDTH);
         int cardX = x + Math.max(0, (w - cardWidth) / 2);
         CardBuilder card = addCard(layout, cardX, y, cardWidth, key("screen.card.kill_credit"));
@@ -861,10 +1011,12 @@ public class HunterWildcardConfigScreen extends Screen {
         if (!isHunterKillCountMode()) {
             card.hint(key("screen.hint.environment_deaths_unused"));
         }
-        markContentBottom(layout, card.finish() + CARD_GAP);
+        int bottom = card.finish() + CARD_GAP;
+        markContentBottom(layout, bottom);
+        return bottom;
     }
 
-    private void buildBalanceSubPage(Layout layout, int x, int y, int w) {
+    private int buildBalanceSubPage(Layout layout, int x, int y, int w) {
         boolean piglinBoostEnabled = editableConfig.piglinPearlBoostEnabled();
         int bottom = addTwoColumnCards(
                 layout,
@@ -887,72 +1039,83 @@ public class HunterWildcardConfigScreen extends Screen {
         );
         int cardWidth = Math.min(w, MEDIUM_CARD_MAX_WIDTH * 2 + TWO_COLUMN_GAP);
         int cardX = x + Math.max(0, (w - cardWidth) / 2);
+        CardBuilder blazeCard = addCard(layout, cardX, bottom, cardWidth, key("screen.card.blaze_drops"));
+        blazeCard.booleanField(BooleanField.BLAZE_ROD_CHANCE_ENABLED);
+        blazeCard.number(NumberField.BLAZE_ROD_CHANCE_PERCENT, editableConfig.blazeRodChanceEnabled());
+        blazeCard.hint(editableConfig.blazeRodChanceEnabled() ? key("screen.hint.blaze_drops") : key("screen.hint.blaze_drops_disabled"));
+        bottom = blazeCard.finish() + CARD_GAP;
         CardBuilder locatorCard = addCard(layout, cardX, bottom, cardWidth, key("screen.card.locator_bar"));
         locatorCard.booleanField(BooleanField.LOCATOR_BAR_TEAM_ONLY);
         locatorCard.hint(key("screen.hint.locator_bar"));
-        markContentBottom(layout, locatorCard.finish() + CARD_GAP);
+        bottom = locatorCard.finish() + CARD_GAP;
+        markContentBottom(layout, bottom);
+        return bottom;
     }
 
-    private void buildWildcardPage(Layout layout) {
-        int x = layout.contentX();
-        int y = pageTop(layout);
-        int w = layout.usableContentWidth();
-
-        if (editableConfig == null) {
-            CardBuilder card = addCard(layout, x, layout.contentY(), w, key("screen.card.wildcard_rules"));
-            card.hint(key("screen.hint.waiting_config_sync"));
-            markContentBottom(layout, card.finish());
-            return;
+    private void buildWildcardPage(Layout l) {
+        int x=l.contentX(),y=pageTop(l),w=l.usableContentWidth();
+        if(editableConfig==null){CardBuilder c=addCard(l,x,y,w,key("screen.card.wildcard_rules"));c.hint(key("screen.hint.waiting_config_sync"));markContentBottom(l,c.finish());return;}
+        if(selectedWildcardSettings!=null){markContentBottom(l,addWildcardSettingsCard(l,x,y,w,selectedWildcardSettings));return;}
+        addContentLabel(l,key("ui.timing"),x,y+6,0xFFB99AFF,false);
+        addWildcardBulkActions(l,x+w-136,y,ToggleField.values());
+        y+=26;
+        y=addTwoColumnCards(l,x,y,w,MEDIUM_CARD_MAX_WIDTH,
+            key("ui.timing.interval"),t->{
+                t.dropdown(DropdownField.WILDCARD_INTERVAL_MODE);
+                if("RANDOM".equals(editableConfig.wildcardIntervalMode()))t.numberPair(NumberField.WILDCARD_INTERVAL_MIN_SECONDS,NumberField.WILDCARD_INTERVAL_MAX_SECONDS);else t.number(NumberField.WILDCARD_INTERVAL_SECONDS);
+            },key("ui.timing.duration"),t->{
+                t.dropdown(DropdownField.WILDCARD_DURATION_MODE);
+                if("RANDOM".equals(editableConfig.wildcardDurationMode()))t.numberPair(NumberField.WILDCARD_DURATION_MIN_SECONDS,NumberField.WILDCARD_DURATION_MAX_SECONDS);else t.number(NumberField.WILDCARD_DURATION_SECONDS);
+            });
+        wildcardSearch=new TextFieldWidget(textRenderer,x,y,w,20,text(key("ui.wildcard.search")));
+        wildcardSearch.setPlaceholder(text(key("ui.wildcard.search")));wildcardSearch.setMaxLength(80);wildcardSearch.setText(wildcardQuery);
+        wildcardSearch.setChangedListener(q->{wildcardQuery=q;searchRebuild=true;});addDrawableChild(wildcardSearch);registerContentWidget(wildcardSearch);y+=28;
+        String query=wildcardQuery.toLowerCase(java.util.Locale.ROOT);
+        int total=0;
+        for(WildcardCategory category:WildcardCategory.values()) {
+            List<ToggleField> fields=java.util.Arrays.stream(ToggleField.inCategory(category))
+                .filter(f->tr(f.label).toLowerCase(java.util.Locale.ROOT).contains(query)||f.id.contains(query)||tr(f.description).toLowerCase(java.util.Locale.ROOT).contains(query)).toList();
+            if(fields.isEmpty())continue;
+            total+=fields.size();
+            int columns=w>=420?2:1,gap=8,padding=10;
+            int cellWidth=(w-padding*2-(columns-1)*gap)/columns;
+            int rows=(fields.size()+columns-1)/columns,cardHeight=30+rows*36+8;
+            boxes.add(new Box(x,y,w,cardHeight,0xF01C232C,0xFF374351));
+            addContentLabel(l,category.label,x+padding,y+9,0xFFB99AFF,false);
+            addWildcardBulkActions(l,x+w-padding-136,y+2,ToggleField.inCategory(category));
+            for(int i=0;i<fields.size();i++) {
+                ToggleField f=fields.get(i);boolean enabled=getToggle(editableConfig,f);
+                int tx=x+padding+(i%columns)*(cellWidth+gap),ty=y+28+(i/columns)*36;
+                boolean settings=hasWildcardSettings(f),test=canManage&&isDebugPageEnabled();
+                int settingsWidth=settings||test?48:0;
+                int switchX=tx+cellWidth-48,settingsX=switchX-settingsWidth-5,infoX=settingsX-17;
+                int labelWidth=Math.max(24,infoX-(tx+26)-4);
+                boxes.add(new Box(tx,ty,cellWidth,32,0x5527323E,0xFF374351));
+                icons.add(new Icon(WildcardIcons.iconFor(f.id),tx+5,ty+8));
+                wrappedLabels.add(new WrappedLabel(f.label,tx+26,ty+4,24,0xFFE8EDF2,false,labelWidth,2));
+                addContentLabel(l,"i",infoX+5,ty+11,0xFF78B8FA,false);
+                infoHints.add(new InfoHint(infoX,ty+6,tr(f.description)));
+                if(settings||test)addContentButton(l,settingsX,ty+5,settingsWidth,22,key(settings?"screen.button.settings":"ui.wildcard.test_short"),"",b->{if(settings)openWildcardSettings(f);else sendTestWildcard(f);},ButtonVariant.LINK,true);
+                addContentButton(l,switchX,ty+5,48,22,key(enabled?"screen.toggle.on_short":"screen.toggle.off_short"),spec("screen.tooltip.wildcard_toggle",f.label,key(enabled?"screen.toggle.enabled":"screen.toggle.disabled")),b->toggleField(f),enabled?ButtonVariant.SWITCH_ON:ButtonVariant.SWITCH_OFF,canEditConfig());
+            }
+            y+=cardHeight+10;
         }
+        if(total==0){addHintText(l,key("ui.search.empty"),x,y,w);y+=24;}
+        markContentBottom(l,y);
+    }
 
-        if (selectedWildcardSettings != null && hasWildcardSettings(selectedWildcardSettings)) {
-            // Sub-page: only the per-wildcard settings card; the header breadcrumb/back button leads back.
-            markContentBottom(layout, addWildcardSettingsCard(layout, x, y, w, selectedWildcardSettings));
-            return;
-        }
+    private void addWildcardBulkActions(Layout layout,int x,int y,ToggleField[] fields) {
+        if(!canManage)return;
+        addContentButton(layout,x,y,64,22,key("ui.bulk.on"),"",b->setWildcardGroup(fields,true),ButtonVariant.LINK,canEditConfig());
+        addContentButton(layout,x+72,y,64,22,key("ui.bulk.off"),"",b->setWildcardGroup(fields,false),ButtonVariant.LINK,canEditConfig());
+    }
 
-        selectedWildcardSettings = null;
-        int bottom = addTwoColumnCards(
-                layout,
-                x,
-                y,
-                w,
-                MEDIUM_CARD_MAX_WIDTH,
-                key("screen.card.wildcard_general"),
-                card -> {
-                    card.titleButtons(List.of(
-                            new ButtonSpec(key("screen.button.enable_all_wildcards"), widget -> setAllWildcards(true), ButtonVariant.NORMAL, canEditConfig(), key("screen.tooltip.enable_all_wildcards")),
-                            new ButtonSpec(key("screen.button.disable_all_wildcards"), widget -> setAllWildcards(false), ButtonVariant.DANGER, canEditConfig(), key("screen.tooltip.disable_all_wildcards"))
-                    ), 70);
-                    card.dropdown(DropdownField.WILDCARD_INTERVAL_MODE);
-                    if ("RANDOM".equals(editableConfig.wildcardIntervalMode())) {
-                        card.numberPair(NumberField.WILDCARD_INTERVAL_MIN_SECONDS, NumberField.WILDCARD_INTERVAL_MAX_SECONDS);
-                    } else {
-                        card.number(NumberField.WILDCARD_INTERVAL_SECONDS);
-                    }
-                    card.dropdown(DropdownField.WILDCARD_DURATION_MODE);
-                    if ("RANDOM".equals(editableConfig.wildcardDurationMode())) {
-                        card.numberPair(NumberField.WILDCARD_DURATION_MIN_SECONDS, NumberField.WILDCARD_DURATION_MAX_SECONDS);
-                    } else {
-                        card.number(NumberField.WILDCARD_DURATION_SECONDS);
-                    }
-                    card.info(key("screen.field.enabled_wildcards"), spec("screen.count.enabled_wildcards", enabledWildcardCount(editableConfig), ToggleField.values().length), enabledWildcardCount(editableConfig) > 0 ? 0xFF77E287 : 0xFFC9D4DE);
-                },
-                key("screen.card.wildcard_trigger_status"),
-                card -> {
-                    if (serverSync == null) {
-                        card.hint(key("screen.hint.waiting_server_sync"));
-                    } else {
-                        card.info(key("screen.field.current_wildcard"), wildcardDisplayName(), serverSync.activeWildcardRunning() ? 0xFF7FC2FF : 0xFFC9D4DE);
-                        card.info(key("screen.field.next_wildcard"), formatSeconds(serverSync.nextWildcardSeconds()), 0xFFC9D4DE);
-                        card.info(key("screen.field.remaining"), formatSeconds(serverSync.activeWildcardRemainingSeconds()), serverSync.activeWildcardRunning() ? 0xFF7FC2FF : 0xFFC9D4DE);
-                    }
-                }
-        );
-        for (WildcardCategory category : WildcardCategory.values()) {
-            bottom = addWildcardToggleMatrixCard(layout, x, bottom, w, category);
-        }
-        markContentBottom(layout, bottom);
+    private void setWildcardGroup(ToggleField[] fields,boolean enabled) {
+        if(!canEditConfig())return;
+        commitVisibleInputs();
+        for(ToggleField field:fields)editableConfig=setToggle(editableConfig,field,enabled);
+        ConfigDraft.value=editableConfig;
+        clearAndInit();
     }
 
     private void buildRunnerVictoryCard(CardBuilder card, RunnerVictoryType victoryType) {
@@ -979,7 +1142,12 @@ public class HunterWildcardConfigScreen extends Screen {
                 )), 1, 132);
             }
             case COLLECT_ITEM -> {
-                card.string(StringField.TARGET_ITEM_ID);
+                var itemId = net.minecraft.util.Identifier.tryParse(editableConfig.targetItemId());
+                if(itemId!=null) card.hint(net.minecraft.registry.Registries.ITEM.get(itemId).getName().getString());
+                if(!overviewReadOnly) card.inlineAction(key("ui.item.search"),b->client.setScreen(new ItemPickerScreen(this,id->{editableConfig=setString(editableConfig,StringField.TARGET_ITEM_ID,id);ConfigDraft.value=editableConfig;pendingStringText.remove(StringField.TARGET_ITEM_ID);ConfigDraft.raw.remove(StringField.TARGET_ITEM_ID.name());})),ButtonVariant.LINK,canEditConfig(),86);
+                if(canManage && !overviewReadOnly) card.inlineAction(key("ui.item.advanced"),b->{advancedItemId=!advancedItemId;clearAndInit();},ButtonVariant.LINK,true,112);
+                card.endActions();
+                if(!overviewReadOnly && (advancedItemId || !canManage)) card.string(StringField.TARGET_ITEM_ID);
                 card.number(NumberField.TARGET_ITEM_COUNT);
             }
         }
@@ -1003,50 +1171,66 @@ public class HunterWildcardConfigScreen extends Screen {
         };
     }
 
-    private void buildDebugPage(Layout layout) {
-        int x = layout.contentX();
-        int y = pageTop(layout);
-        int w = layout.usableContentWidth();
-
-        CardBuilder actionCard = addCard(layout, x, y, w, key("screen.card.game_controls"));
-        actionCard.hint(canManage ? key("screen.hint.debug_actions") : key("screen.error.debug_op_only"));
-        actionCard.buttonGrid(List.of(
-                new ButtonSpec(key("screen.button.stop_game"), widget -> sendDebugAction(DebugAction.STOP_GAME), ButtonVariant.DANGER, canManage && isGameActive(), key("screen.tooltip.stop_game")),
-                new ButtonSpec(key("screen.button.roll_wildcard"), widget -> sendDebugAction(DebugAction.ROLL_WILDCARD), ButtonVariant.NORMAL, canManage && serverSync != null && serverSync.gameState() == GameState.RUNNING, key("screen.tooltip.roll_wildcard")),
-                new ButtonSpec(key("screen.button.stop_wildcard"), widget -> sendDebugAction(DebugAction.STOP_WILDCARD), ButtonVariant.DANGER, canManage && serverSync != null && serverSync.activeWildcardRunning(), key("screen.tooltip.stop_wildcard"))
-        ), w >= 900 ? 3 : 2, 150);
-        int currentY = actionCard.finish() + CARD_GAP;
-
-        CardBuilder testCard = addCard(layout, x, currentY, w, key("screen.card.test_wildcard"));
-        List<ButtonSpec> testButtons = new ArrayList<>();
-        for (ToggleField field : ToggleField.values()) {
-            boolean enabled = editableConfig != null && getToggle(editableConfig, field);
-            testButtons.add(new ButtonSpec(
-                    enabled ? spec("screen.button.test_wildcard", field.label) : spec("screen.button.wildcard_disabled", field.label),
-                    widget -> sendTestWildcard(field),
-                    ButtonVariant.NORMAL,
-                    canManage && enabled,
-                    enabled ? key("screen.tooltip.test_wildcard") : key("screen.tooltip.test_wildcard_disabled")
-            ));
-        }
-        testCard.buttonGrid(testButtons, w >= 900 ? 3 : 2, 150);
-        markContentBottom(layout, testCard.finish());
+    private void buildDebugPage(Layout l) {
+        CardBuilder c=addCard(l,l.contentX(),pageTop(l),l.usableContentWidth(),key("ui.debug.tools"));
+        c.hint(key("ui.debug.hint"));
+        c.button(key("screen.button.roll_wildcard"),b->sendDebugAction(DebugAction.ROLL_WILDCARD),ButtonVariant.NORMAL,canManage&&serverSync!=null&&serverSync.gameState()==GameState.RUNNING,180);
+        c.button(key("screen.button.stop_wildcard"),b->sendDebugAction(DebugAction.STOP_WILDCARD),ButtonVariant.DANGER,canManage&&serverSync!=null&&serverSync.activeWildcardRunning(),180);
+        c.button(key("ui.debug.browse"),b->switchPage(Page.WILDCARD),ButtonVariant.PRIMARY,true,180);
+        markContentBottom(l,c.finish());
     }
 
-    private void buildFooter(Layout layout) {
-        int y = layout.panelY() + layout.panelHeight() - 32;
-        if (isConfigEditPage()) {
-            int buttonWidth = Math.max(76, Math.min(108, (layout.usableContentWidth() - 16) / 3));
-            int x = layout.contentX() + Math.max(0, layout.usableContentWidth() - (buttonWidth * 3 + 16));
-            String saveLabel = isRoundRunning() ? key("screen.button.apply_rules") : key("screen.button.save_config");
-            String saveTooltip = isRoundRunning() ? key("screen.tooltip.apply_rules") : key("screen.tooltip.save_config");
-            saveButton = addButton(x, y, buttonWidth, 24, saveLabel, saveTooltip, widget -> saveConfig(), ButtonVariant.PRIMARY, canSaveConfig());
-            addButton(x + buttonWidth + 8, y, buttonWidth, 24, key("screen.button.restore_default"), key("screen.tooltip.restore_default"), widget -> restoreDefaultConfig(), ButtonVariant.NORMAL, canEditConfig() && editableConfig != null);
-            addButton(x + (buttonWidth + 8) * 2, y, buttonWidth, 24, key("screen.button.close"), "", widget -> close(), ButtonVariant.NORMAL, true);
-            return;
-        }
+    private void buildFooter(Layout l) {
+        int y=l.panelY()+l.panelHeight()-32, x=l.contentX(), w=l.usableContentWidth();
+        if (isConfigEditPage() || currentPage==Page.CHANGES) {
+            int bw=Math.min(76,Math.max(48,(w-92)/3)),groupWidth=3*bw+12;
+            int start=x+w-groupWidth;
+            if(canManage) {
+                changesLink=addButton(x,y,Math.max(56,start-x-8),24,spec("ui.changes.count",changeCount()),"",b->switchPage(Page.CHANGES),ButtonVariant.LINK,true);
+                saveButton=addButton(start,y,bw,24,ConfigDraft.pendingId!=0?key("ui.saving"):key("ui.apply"),"",b->saveConfig(),ButtonVariant.PRIMARY,canSaveConfig());
+                addButton(start+bw+6,y,bw,24,key("ui.undo"),"",b->discardChanges(),ButtonVariant.NORMAL,ConfigDraft.pendingId==0);
+            }
+            addButton(x+w-bw,y,bw,24,key("screen.button.close"),"",b->close(),ButtonVariant.NORMAL,true);
+        } else if (currentPage==Page.GAME && serverSync!=null) {
+            int bw=Math.min(96,Math.max(50,(w-12)/3));
+            x+=w-(3*bw+12);
+            boolean waiting=serverSync.gameState()==GameState.WAITING;
+            if(canManage) addButton(x,y,bw,24,waiting?key("screen.button.start_game"):key(confirmStop?"ui.stop.confirm":"screen.button.stop_game"),startGameTooltip(waiting),b->{
+                if(waiting) sendGameAction(GameAction.START_GAME);
+                else if(confirmStop) {sendGameAction(GameAction.STOP_GAME);confirmStop=false;}
+                else {confirmStop=true;clearAndInit();}
+            },waiting?ButtonVariant.PRIMARY:ButtonVariant.DANGER,waiting?startGameTooltip(true).isBlank():true);
+            addButton(x+bw+6,y,bw,24,key("ui.display"),"",b->client.setScreen(new DisplaySettingsScreen(this)),ButtonVariant.NORMAL,true);
+            addButton(x+2*(bw+6),y,bw,24,key("screen.button.close"),"",b->close(),ButtonVariant.NORMAL,true);
+        } else addButton(x+w-86,y,86,24,key("screen.button.close"),"",b->close(),ButtonVariant.NORMAL,true);
+    }
 
-        addButton(layout.contentX() + layout.usableContentWidth() - 86, y, 86, 24, key("screen.button.close"), "", widget -> close(), ButtonVariant.NORMAL, true);
+    private List<String> changes() {
+        List<String> list=new ArrayList<>();
+        if(editableConfig==null || ConfigDraft.base==null) return list;
+        ConfigSnapshot base=ConfigDraft.base;
+        for(NumberField f:NumberField.values()) if(getNumber(base,f)!=getNumber(editableConfig,f) || pendingNumberText.containsKey(f))
+            list.add(tr(f.label)+": "+formatNumber(f,getNumber(base,f))+" → "+pendingNumberText.getOrDefault(f,formatNumber(f,getNumber(editableConfig,f)))+ (isRoundRunning()?tr(key(f.live?"ui.live":"ui.locked")):""));
+        for(StringField f:StringField.values()) if(!getString(base,f).equals(getString(editableConfig,f)) || pendingStringText.containsKey(f)) list.add(tr(f.label)+": "+getString(base,f)+" → "+pendingStringText.getOrDefault(f,getString(editableConfig,f)));
+        for(DropdownField f:DropdownField.values()) if(!getDropdownValue(base,f).equals(getDropdownValue(editableConfig,f))) list.add(tr(f.label)+": "+dropdownLabel(f,getDropdownValue(base,f))+" → "+dropdownLabel(f,getDropdownValue(editableConfig,f)));
+        for(BooleanField f:BooleanField.values()) if(getBoolean(base,f)!=getBoolean(editableConfig,f)) list.add(tr(f.label)+": "+tr(key(getBoolean(editableConfig,f)?"screen.toggle.enabled":"screen.toggle.disabled")));
+        for(ToggleField f:ToggleField.values()) if(getToggle(base,f)!=getToggle(editableConfig,f)) list.add(tr(f.label)+": "+tr(key(getToggle(editableConfig,f)?"screen.toggle.enabled":"screen.toggle.disabled")));
+        return list;
+    }
+    private String dropdownLabel(DropdownField f,String value) { return f.options.stream().filter(o->o.value().equals(value)).map(o->tr(o.displayName())).findFirst().orElse(value); }
+    private int changeCount() { return changes().size(); }
+    private void discardChanges() {
+        toastMessage="";statusMessage="";ConfigDraft.discard(); editableConfig=ConfigDraft.value; pendingNumberText.clear(); pendingStringText.clear(); clearAndInit();
+    }
+    private void buildChangesPage(Layout l) {
+        CardBuilder c=addCard(l,l.contentX(),pageTop(l),l.usableContentWidth(),spec("ui.changes.count",changeCount()));
+        if(ConfigDraft.pendingId!=0) c.hint(key("ui.saving"));
+        if(ConfigDraft.conflict()) c.hint(key("ui.save.conflict"));
+        if(!ConfigDraft.message.isBlank()) c.hint(ConfigDraft.message);
+        c.hint(key("ui.draft.explanation"));
+        for(String change:changes()) c.hint(change);
+        if(changes().isEmpty()) c.hint(key("screen.info.no_unsaved_changes"));
+        markContentBottom(l,c.finish());
     }
 
     private CardBuilder addCard(Layout layout, int x, int y, int width, String title) {
@@ -1119,12 +1303,13 @@ public class HunterWildcardConfigScreen extends Screen {
             leftBody.build(leftCard);
             CardBuilder rightCard = addCard(layout, rowX + leftWidth + TWO_COLUMN_GAP, y, rightWidth, rightTitle);
             rightBody.build(rightCard);
-            int leftBottom = leftCard.finish();
-            int rightBottom = rightCard.finish();
+            int rowHeight = Math.max(leftCard.height(), rightCard.height());
+            int leftBottom = leftCard.finish(rowHeight);
+            int rightBottom = rightCard.finish(rowHeight);
             return Math.max(leftBottom, rightBottom) + CARD_GAP;
         }
 
-        int cardWidth = Math.min(width, Math.max(leftMaxWidth, rightMaxWidth));
+        int cardWidth = width;
         int cardX = x + Math.max(0, (width - cardWidth) / 2);
         CardBuilder leftCard = addCard(layout, cardX, y, cardWidth, leftTitle);
         leftBody.build(leftCard);
@@ -1134,40 +1319,18 @@ public class HunterWildcardConfigScreen extends Screen {
         return rightCard.finish() + CARD_GAP;
     }
 
-    private int addWildcardToggleMatrixCard(Layout layout, int x, int y, int width, WildcardCategory category) {
-        int columns = wildcardToggleColumns(width);
-        int cardWidth = width;
-        int cardX = x;
-        ToggleField[] fields = ToggleField.inCategory(category);
-        int enabledCount = 0;
-        for (ToggleField field : fields) {
-            if (getToggle(editableConfig, field)) {
-                enabledCount++;
-            }
-        }
-        CardBuilder matrixCard = addCard(layout, cardX, y, cardWidth, spec("screen.card.wildcard_category", category.label, enabledCount, fields.length));
-        matrixCard.titleButtons(List.of(
-                new ButtonSpec(key("screen.button.enable_category"), widget -> setCategoryWildcards(category, true), ButtonVariant.NORMAL, canEditConfig(), key("screen.tooltip.enable_category")),
-                new ButtonSpec(key("screen.button.disable_category"), widget -> setCategoryWildcards(category, false), ButtonVariant.DANGER, canEditConfig(), key("screen.tooltip.disable_category"))
-        ), 70);
-        matrixCard.toggleGrid(fields, columns);
-        return matrixCard.finish() + CARD_GAP;
-    }
+
 
     private int addWildcardSettingsCard(Layout layout, int x, int y, int width, ToggleField field) {
         int cardWidth = Math.min(width, MEDIUM_CARD_MAX_WIDTH);
-        int cardX = x + Math.max(0, (width - cardWidth) / 2);
-        CardBuilder card = addCard(layout, cardX, y, cardWidth, spec("screen.card.wildcard_settings", field.label));
-        boolean enabled = getToggle(editableConfig, field);
-        card.info(key("screen.field.wildcard_state"), enabled ? key("screen.toggle.enabled") : key("screen.toggle.disabled"), enabled ? 0xFF77E287 : 0xFF9FAAB4);
+        int cardX = x;
+        CardBuilder card = addCard(layout, cardX, y, cardWidth, key("ui.wildcard.parameters"));
         switch (field) {
             case HUNTER_RADAR -> {
                 card.number(NumberField.HUNTER_RADAR_WARNING_DISTANCE);
-                card.hint(key("screen.hint.hunter_radar_settings"));
             }
             case SPACE_SHIFT -> {
                 card.number(NumberField.SPACE_SHIFT_INTERVAL_SECONDS);
-                card.hint(key("screen.hint.space_shift_settings"));
             }
             case SUPPLY_DROP -> {
                 card.number(NumberField.SUPPLY_DROP_INTERVAL_SECONDS);
@@ -1175,17 +1338,14 @@ public class HunterWildcardConfigScreen extends Screen {
             }
             case BLOCK_DECAY -> {
                 card.number(NumberField.BLOCK_DECAY_SECONDS);
-                card.hint(key("screen.hint.block_decay_settings"));
             }
             case PEARL_FRENZY -> {
                 card.number(NumberField.PEARL_FRENZY_MAX_PEARLS);
                 card.number(NumberField.PEARL_FRENZY_INTERVAL_SECONDS);
-                card.hint(key("screen.hint.pearl_frenzy_settings"));
             }
             case WIND_CHARGE_BRAWL -> {
                 card.number(NumberField.WIND_CHARGE_BRAWL_INTERVAL_SECONDS);
                 card.number(NumberField.WIND_CHARGE_EXPLOSION_MULTIPLIER_PERCENT);
-                card.hint(key("screen.hint.wind_charge_brawl_settings"));
             }
             case BACKROOMS -> {
                 card.number(NumberField.BACKROOMS_DURATION_SECONDS);
@@ -1193,278 +1353,26 @@ public class HunterWildcardConfigScreen extends Screen {
             }
             default -> card.hint(key("screen.hint.no_wildcard_settings"));
         }
-        card.hint(wildcardInfoTooltip(field));
+        if (canManage && isDebugPageEnabled()) {
+            card.inlineAction(key("screen.card.test_wildcard"), b -> sendTestWildcard(field), ButtonVariant.LINK, getToggle(editableConfig, field), 140);
+            card.endActions();
+        }
         return card.finish() + CARD_GAP;
     }
 
-    private int addStatusBlocks(Layout layout, int x, int y, int width, List<StatusBlock> blocks) {
-        int gap = 12;
-        int columns;
-        if (width >= 430) {
-            columns = 3;
-        } else if (width >= 300) {
-            columns = 2;
-        } else {
-            columns = 1;
-        }
-        columns = Math.max(1, Math.min(columns, blocks.size()));
 
-        int blockHeight = 48;
-        int blockWidth = Math.min(STATUS_BLOCK_MAX_WIDTH, Math.max(80, (width - (columns - 1) * gap) / columns));
-        int gridWidth = blockWidth * columns + (columns - 1) * gap;
-        int gridX = x + Math.max(0, (width - gridWidth) / 2);
-        for (int i = 0; i < blocks.size(); i++) {
-            int column = i % columns;
-            int row = i / columns;
-            addStatusBlock(layout, gridX + column * (blockWidth + gap), y + row * (blockHeight + gap), blockWidth, blockHeight, blocks.get(i));
-        }
 
-        int rows = (blocks.size() + columns - 1) / columns;
-        return y + rows * blockHeight + (rows - 1) * gap + CARD_GAP;
-    }
 
-    private void addStatusBlock(Layout layout, int x, int y, int width, int height, StatusBlock block) {
-        if (isVisibleInContentPartial(layout, y, height)) {
-            boxes.add(new Box(x, y, width, height, 0x77303A46, block.color()));
-        }
-        if (isVisibleInContentPartial(layout, y, height)) {
-            labels.add(new Label(block.label(), x + 8, y + 7, 0xFF9FAAB4, false, Math.max(20, width - 16)));
-            labels.add(new Label(block.value(), x + 8, y + 27, block.color(), true, Math.max(20, width - 16)));
-        }
-    }
 
-    private int addStatusPills(Layout layout, int x, int y, int width, List<StatusBlock> blocks) {
-        int gap = 8;
-        int rowGap = 7;
-        int pillHeight = 28;
-        List<Integer> pillWidths = new ArrayList<>();
-        for (StatusBlock block : blocks) {
-            int textWidth = textRenderer.getWidth(tr(spec("screen.status_pill", tr(block.label()), tr(block.value()))));
-            pillWidths.add(Math.min(190, Math.max(88, textWidth + 24)));
-        }
 
-        int index = 0;
-        int rowY = y;
-        while (index < blocks.size()) {
-            int rowStart = index;
-            int rowWidth = 0;
-            while (index < blocks.size()) {
-                int nextWidth = pillWidths.get(index);
-                int candidateWidth = rowWidth == 0 ? nextWidth : rowWidth + gap + nextWidth;
-                if (candidateWidth > width && index > rowStart) {
-                    break;
-                }
 
-                rowWidth = candidateWidth;
-                index++;
-            }
 
-            int pillX = x + Math.max(0, (width - rowWidth) / 2);
-            for (int i = rowStart; i < index; i++) {
-                StatusBlock block = blocks.get(i);
-                int pillWidth = pillWidths.get(i);
-                addStatusPill(layout, pillX, rowY, pillWidth, pillHeight, block);
-                pillX += pillWidth + gap;
-            }
 
-            rowY += pillHeight + rowGap;
-        }
 
-        return rowY - rowGap + CARD_GAP;
-    }
 
-    private void addStatusPill(Layout layout, int x, int y, int width, int height, StatusBlock block) {
-        if (isVisibleInContentPartial(layout, y, height)) {
-            boxes.add(new Box(x, y, width, height, 0x66303A46, block.color()));
-        }
 
-        String label = spec("screen.label_colon", tr(block.label()));
-        int labelWidth = Math.min(textRenderer.getWidth(tr(label)), Math.max(20, width / 2));
-        int textY = y + Math.max(4, (height - textRenderer.fontHeight) / 2);
-        if (isVisibleInContentPartial(layout, y, height)) {
-            labels.add(new Label(label, x + 8, textY, 0xFF9FAAB4, false, labelWidth));
-            labels.add(new Label(block.value(), x + 8 + labelWidth + 4, textY, block.color(), true, Math.max(20, width - labelWidth - 18)));
-        }
-    }
 
-    private int addTeamManagementCard(Layout layout, int x, int y, int width) {
-        // Two side-by-side team blocks whenever there is room for two 150px sections, so the home page fits without scrolling.
-        boolean twoColumns = width >= 2 * 132 + CARD_PADDING_X * 2 + TWO_COLUMN_GAP;
-        int sectionGap = TWO_COLUMN_GAP;
-        int availableSectionWidth = twoColumns ? (width - CARD_PADDING_X * 2 - sectionGap) / 2 : width - CARD_PADDING_X * 2;
-        int sectionWidth = Math.min(twoColumns ? SMALL_CARD_MAX_WIDTH : MEDIUM_CARD_MAX_WIDTH, Math.max(80, availableSectionWidth));
-        int sectionsWidth = twoColumns ? sectionWidth * 2 + sectionGap : sectionWidth;
-        int cardWidth = Math.min(width, sectionsWidth + CARD_PADDING_X * 2);
-        int cardX = x + Math.max(0, (width - cardWidth) / 2);
-        int contentX = cardX + CARD_PADDING_X;
-        int contentWidth = Math.max(80, cardWidth - CARD_PADDING_X * 2);
-        int sectionsX = contentX + Math.max(0, (contentWidth - sectionsWidth) / 2);
-        int sectionHeight = 46;
-        int sectionY = y + CARD_PADDING_TOP + CARD_TITLE_HEIGHT + 4;
-        int secondSectionY = twoColumns ? sectionY : sectionY + sectionHeight + sectionGap;
-        int sectionsBottom = twoColumns ? sectionY + sectionHeight : secondSectionY + sectionHeight;
-        int bottomRowY = sectionsBottom + 6;
-        int cardHeight = bottomRowY + BUTTON_HEIGHT + CARD_PADDING_BOTTOM - y;
 
-        drawCardBackground(layout, cardX, y, cardWidth, cardHeight);
-        addCardTitle(layout, key("screen.card.team_management"), contentX, y + CARD_PADDING_TOP);
-
-        boolean isHunter = PlayerRole.HUNTER.getTranslationKey().equals(serverSync.playerRole());
-        boolean isRunner = PlayerRole.RUNNER.getTranslationKey().equals(serverSync.playerRole());
-        boolean canChangeTeam = canChangeTeam();
-        String lockedTooltip = canChangeTeam ? "" : key("screen.team.locked_tooltip");
-        addTeamSection(
-                layout,
-                sectionsX,
-                sectionY,
-                sectionWidth,
-                sectionHeight,
-                key("team.hunters"),
-                serverSync.hunterCount(),
-                isHunter,
-                0xFFD76474,
-                isHunter ? key("screen.team.already_hunter") : key("screen.team.join_hunter"),
-                canChangeTeam ? (isHunter ? key("screen.team.already_hunter_tooltip") : key("screen.team.join_hunter_tooltip")) : lockedTooltip,
-                widget -> sendTeamAction(TeamAction.JOIN_HUNTER),
-                canChangeTeam && !isHunter
-        );
-        addTeamSection(
-                layout,
-                twoColumns ? sectionsX + sectionWidth + sectionGap : sectionsX,
-                secondSectionY,
-                sectionWidth,
-                sectionHeight,
-                key("team.runners"),
-                serverSync.runnerCount(),
-                isRunner,
-                0xFF7FC2FF,
-                isRunner ? key("screen.team.already_runner") : key("screen.team.join_runner"),
-                canChangeTeam ? (isRunner ? key("screen.team.already_runner_tooltip") : key("screen.team.join_runner_tooltip")) : lockedTooltip,
-                widget -> sendTeamAction(TeamAction.JOIN_RUNNER),
-                canChangeTeam && !isRunner
-        );
-
-        int leaveWidth = Math.min(260, Math.max(104, contentWidth / 4));
-        int teamLabelWidth = Math.max(40, contentWidth - leaveWidth - BUTTON_GAP);
-        if (isVisibleInContent(layout, bottomRowY, BUTTON_HEIGHT)) {
-            labels.add(new Label(spec("screen.team.current_team", serverSync.playerRole()), contentX, bottomRowY + 6, 0xFFC9D4DE, false, teamLabelWidth));
-        }
-        addContentButton(
-                layout,
-                contentX + contentWidth - leaveWidth,
-                bottomRowY,
-                leaveWidth,
-                BUTTON_HEIGHT,
-                key("screen.team.leave"),
-                canChangeTeam ? (serverSync.playerInTeam() ? key("screen.team.leave_tooltip") : key("screen.team.not_joined_tooltip")) : lockedTooltip,
-                widget -> sendTeamAction(TeamAction.LEAVE),
-                ButtonVariant.DANGER,
-                canChangeTeam && serverSync.playerInTeam()
-        );
-        return y + cardHeight + CARD_GAP;
-    }
-
-    private void addTeamSection(
-            Layout layout,
-            int x,
-            int y,
-            int width,
-            int height,
-            String title,
-            int count,
-            boolean current,
-            int accent,
-            String buttonTitle,
-            String tooltip,
-            ButtonWidget.PressAction action,
-            boolean enabled
-    ) {
-        if (isVisibleInContentPartial(layout, y, height)) {
-            boxes.add(new Box(x, y, width, height, 0x55303A46, 0xFF4C5A66));
-            boxes.add(new Box(x, y, 3, height, accent, accent));
-        }
-        int buttonWidth = Math.min(96, Math.max(78, width / 3));
-        int textWidth = Math.max(40, width - buttonWidth - 24);
-        addContentLabel(layout, title, x + 10, y + 9, accent, true);
-        if (isVisibleInContentPartial(layout, y, height)) {
-            labels.add(new Label(current ? key("screen.team.current_side") : key("screen.team.can_join"), x + Math.max(66, textRenderer.getWidth(tr(title)) + 18), y + 9, current ? 0xFF77E287 : 0xFF9FAAB4, false, Math.max(40, textWidth - 62)));
-        }
-        addContentLabel(layout, spec("screen.team.current_count", count), x + 10, y + 29, 0xFFC9D4DE, false);
-        addContentButton(layout, x + width - buttonWidth - 8, y + height - BUTTON_HEIGHT - 7, buttonWidth, BUTTON_HEIGHT, buttonTitle, tooltip, action, ButtonVariant.NORMAL, enabled);
-    }
-
-    private void addWildcardToggleTile(Layout layout, ToggleField field, int x, int y, int width, int height) {
-        boolean enabled = getToggle(editableConfig, field);
-        boolean configurable = hasWildcardSettings(field);
-        int borderColor = enabled ? 0xFF55B978 : 0xFF59636C;
-        if (isVisibleInContentPartial(layout, y, height)) {
-            boxes.add(new Box(x, y, width, height, enabled ? 0x55324B3F : 0x55303A46, borderColor));
-        }
-
-        int toggleWidth = Math.min(34, Math.max(30, width / 5));
-        int settingsWidth = configurable ? 42 : 0;
-        int settingsGap = configurable ? 4 : 0;
-        int buttonsWidth = toggleWidth + settingsWidth + settingsGap;
-        int infoButtonSize = 12;
-        int infoGap = 3;
-        int iconSize = 16;
-        int iconX = x + 7;
-        int iconY = y + Math.max(4, (height - iconSize) / 2);
-        int labelX = iconX + iconSize + 6;
-        int rightButtonsX = x + width - buttonsWidth - 5;
-        int maxInfoX = rightButtonsX - infoButtonSize - 4;
-        int desiredTextWidth = Math.max(8, width - buttonsWidth - (labelX - x) - infoButtonSize - infoGap - 12);
-        int firstLineWidth = textRenderer.getWidth(wrapLabelText(tr(field.label), desiredTextWidth, 2).get(0));
-        int infoX = Math.min(labelX + Math.min(firstLineWidth, desiredTextWidth) + infoGap, Math.max(labelX, maxInfoX));
-        int textWidth = Math.max(8, infoX - labelX - infoGap);
-        if (isVisibleInContentPartial(layout, y, height)) {
-            icons.add(new Icon(WildcardIcons.iconFor(field.id), iconX, iconY));
-            wrappedLabels.add(new WrappedLabel(field.label, labelX, y, height, enabled ? 0xFFFFFFFF : 0xFFC9D4DE, false, textWidth, 2));
-        }
-        if (!isVisibleInContent(layout, y, height)) {
-            // Widgets are not clipped by the scissor; only show the tile's buttons once the whole tile is in view.
-            return;
-        }
-        addContentButton(
-                layout,
-                infoX,
-                y + Math.max(0, (height - infoButtonSize) / 2),
-                infoButtonSize,
-                infoButtonSize,
-                key("screen.button.info"),
-                wildcardInfoTooltip(field),
-                widget -> {
-                },
-                ButtonVariant.NORMAL,
-                true
-        );
-        if (configurable) {
-            addContentButton(
-                    layout,
-                    x + width - buttonsWidth - 5,
-                    y + Math.max(4, (height - 18) / 2),
-                    settingsWidth,
-                    18,
-                    key("screen.button.settings"),
-                    "",
-                    widget -> openWildcardSettings(field),
-                    ButtonVariant.NORMAL,
-                    editableConfig != null
-            );
-        }
-        addContentButton(
-                layout,
-                x + width - toggleWidth - 5,
-                y + Math.max(4, (height - 18) / 2),
-                toggleWidth,
-                18,
-                enabled ? key("screen.toggle.on_short") : key("screen.toggle.off_short"),
-                wildcardToggleTooltip(field, enabled),
-                widget -> toggleField(field),
-                enabled ? ButtonVariant.TOGGLE_ON : ButtonVariant.TOGGLE_OFF,
-                canEditConfig()
-        );
-    }
 
     private String wildcardToggleTooltip(ToggleField field, boolean enabled) {
         return spec("screen.tooltip.wildcard_toggle", field.label, enabled ? key("screen.toggle.enabled") : key("screen.toggle.disabled"));
@@ -1498,7 +1406,7 @@ public class HunterWildcardConfigScreen extends Screen {
 
     private void drawCardBackground(Layout layout, int x, int y, int width, int height) {
         if (isVisibleInContentPartial(layout, y, height)) {
-            boxes.add(new Box(x, y, width, height, 0x88303A46, 0xFF4C5A66));
+            boxes.add(new Box(x, y, width, height, 0xF01C232C, 0xFF27323E));
         }
     }
 
@@ -1506,8 +1414,11 @@ public class HunterWildcardConfigScreen extends Screen {
         drawCardBackground(layout, x, y, width, height);
     }
 
+    private int teamAccent(String title) {
+        return title.equals(key("team.hunters"))?0xFFEF7181:title.equals(key("team.runners"))?0xFF78B8FA:0xFFFFFFFF;
+    }
     private void addCardTitle(Layout layout, String title, int x, int y) {
-        addContentLabel(layout, title, x, y, 0xFFFFFFFF, true);
+        addContentLabel(layout, title, x, y, teamAccent(title), true);
     }
 
     private void addHintText(Layout layout, String text, int x, int y, int width) {
@@ -1523,13 +1434,19 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private int addInfoRow(Layout layout, String label, String value, int x, int y, int width, int valueColor) {
-        int valueX = x + Math.max(92, Math.min(LABEL_WIDTH, width / 2));
+        String caption = tr(spec("screen.label_colon", tr(label)));
+        int labelWidth = textRenderer.getWidth(caption);
+        int valueWidth = textRenderer.getWidth(tr(value));
+        boolean stacked = labelWidth + valueWidth + 12 > width;
         int labelY = y + Math.max(3, (ROW_HEIGHT - textRenderer.fontHeight) / 2);
-        addContentLabel(layout, spec("screen.label_colon", tr(label)), x, labelY, 0xFFC9D4DE, false);
-        if (isVisibleInContentPartial(layout, y, ROW_HEIGHT)) {
-            labels.add(new Label(value, valueX, labelY, valueColor, false, Math.max(40, width - (valueX - x))));
+        int valueX = stacked ? x : x + Math.max(labelWidth + 12, width - valueWidth);
+        int valueY = stacked ? labelY + textRenderer.fontHeight + 5 : labelY;
+        int rowHeight = stacked ? ROW_HEIGHT + textRenderer.fontHeight + 5 : ROW_HEIGHT;
+        if (isVisibleInContentPartial(layout, y, rowHeight)) {
+            labels.add(new Label(caption, x, labelY, 0xFFC9D4DE, false, stacked ? width : valueX - x - 8));
+            labels.add(new Label(value, valueX, valueY, valueColor, false, width - (valueX - x)));
         }
-        return nextRowY(y);
+        return y + rowHeight + ROW_GAP;
     }
 
     private int addInputRow(Layout layout, NumberField field, int x, int y, int width) {
@@ -1537,6 +1454,7 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private int addInputRow(Layout layout, NumberField field, int x, int y, int width, boolean editable) {
+        if (!canManage || overviewReadOnly) return addInfoRow(layout,field.label,(field.name().endsWith("SECONDS")?readableTime(getNumber(editableConfig,field)):formatNumber(field,getNumber(editableConfig,field))+" "+tr(numberUnit(field))),x,y,width,0xFFE8EDF2);
         int unitSpace = numberUnitSpace(field);
         int fieldWidth = numberFieldWidth(field, width, unitSpace);
         if (labelFits(field.label, formLabelWidth(width, fieldWidth, unitSpace))) {
@@ -1551,6 +1469,7 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private int addInputRow(Layout layout, StringField field, int x, int y, int width) {
+        if (!canManage || overviewReadOnly) return addInfoRow(layout,field.label,getString(editableConfig,field),x,y,width,0xFFE8EDF2);
         int fieldWidth = textFieldWidth(width);
         if (labelFits(field.label, width - fieldWidth - 8)) {
             addContentStringField(layout, field, x, y, width, CONTROL_HEIGHT, true);
@@ -1575,7 +1494,7 @@ public class HunterWildcardConfigScreen extends Screen {
         if (field.unit.isBlank()) {
             return 0;
         }
-        int unitTextWidth = Math.min(UNIT_WIDTH, Math.max(18, textRenderer.getWidth(tr(field.unit))));
+        int unitTextWidth = Math.min(UNIT_WIDTH, Math.max(18, textRenderer.getWidth(tr(numberUnit(field)))));
         return unitTextWidth + 8;
     }
 
@@ -1611,6 +1530,7 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private int addDropdownRow(Layout layout, DropdownField field, int x, int y, int width, boolean editable) {
+        if (!canManage || overviewReadOnly) return addInfoRow(layout,field.label,dropdownLabel(field,getDropdownValue(editableConfig,field)),x,y,width,0xFFE8EDF2);
         int dropdownWidth = dropdownWidth(width);
         int dropdownX = x + width - dropdownWidth;
         if (labelFits(field.label, dropdownX - x - 8)) {
@@ -1628,6 +1548,7 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private int addToggleRow(Layout layout, BooleanField field, int x, int y, int width) {
+        if (!canManage || overviewReadOnly) return addInfoRow(layout,field.label,key(getBoolean(editableConfig,field)?"screen.toggle.enabled":"screen.toggle.disabled"),x,y,width,0xFFE8EDF2);
         addContentBooleanField(layout, field, x, y, width, BUTTON_HEIGHT);
         return nextRowY(y);
     }
@@ -1742,7 +1663,7 @@ public class HunterWildcardConfigScreen extends Screen {
             labels.add(new Label(spec("screen.label_colon", field.label), x, labelY, 0xFFC9D4DE, false, formLabelWidth(width, fieldWidth, unitSpace)));
         }
         if (!field.unit.isBlank()) {
-            labels.add(new Label(field.unit, fieldX + fieldWidth + 8, labelY, fieldEditable ? 0xFFC9D4DE : 0xFF7D8790));
+            labels.add(new Label(numberUnit(field), fieldX + fieldWidth + 8, labelY, fieldEditable ? 0xFFC9D4DE : 0xFF7D8790));
         }
 
         registerNumberField(field, fieldX, y, fieldWidth, fieldHeight, fieldEditable);
@@ -1751,9 +1672,9 @@ public class HunterWildcardConfigScreen extends Screen {
     /** Creates the widget for a number field, seeding it with any uncommitted text the user typed earlier. */
     private void registerNumberField(NumberField field, int x, int y, int width, int height, boolean editable) {
         TextFieldWidget textField = new TextFieldWidget(textRenderer, x, y, width, height, text(field.label));
-        textField.setMaxLength(11);
+        textField.setMaxLength(18);
         String pending = editable ? pendingNumberText.get(field) : null;
-        textField.setText(pending != null ? pending : Integer.toString(getNumber(editableConfig, field)));
+        textField.setText(pending != null ? pending : formatNumber(field, getNumber(editableConfig, field)));
         textField.setEditable(editable);
         textField.active = editable;
         if (!editable) {
@@ -1765,11 +1686,12 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private void onNumberTextChanged(NumberField field, String value) {
-        if (editableConfig == null || value.trim().equals(Integer.toString(getNumber(editableConfig, field)))) {
+        if (editableConfig == null || value.trim().equals(formatNumber(field, getNumber(editableConfig, field)))) {
             pendingNumberText.remove(field);
         } else {
             pendingNumberText.put(field, value);
         }
+        if(pendingNumberText.containsKey(field))ConfigDraft.raw.put(field.name(),value);else ConfigDraft.raw.remove(field.name());
     }
 
     private void onStringTextChanged(StringField field, String value) {
@@ -1778,6 +1700,7 @@ public class HunterWildcardConfigScreen extends Screen {
         } else {
             pendingStringText.put(field, value);
         }
+        if(pendingStringText.containsKey(field))ConfigDraft.raw.put(field.name(),value);else ConfigDraft.raw.remove(field.name());
     }
 
     private int addCoordinateInput(Layout layout, String axis, NumberField field, int x, int y, int axisWidth, int fieldWidth, int fieldHeight) {
@@ -1848,27 +1771,11 @@ public class HunterWildcardConfigScreen extends Screen {
         return options;
     }
 
-    private StyledButtonWidget addToggleField(ToggleField field, int x, int y, int width, int height) {
-        boolean enabled = getToggle(editableConfig, field);
-        return addButton(
-                x,
-                y,
-                width,
-                height,
-                spec("screen.toggle.field_state", field.label, enabled ? key("screen.toggle.enabled") : key("screen.toggle.disabled")),
-                "",
-                widget -> toggleField(field),
-                enabled ? ButtonVariant.TOGGLE_ON : ButtonVariant.TOGGLE_OFF,
-                canEditConfig()
-        );
-    }
+
 
     private StyledButtonWidget addBooleanField(BooleanField field, int x, int y, int width, int height) {
         boolean enabled = getBoolean(editableConfig, field);
-        int buttonWidth = width < 320
-                ? Math.max(78, Math.min(116, width / 2))
-                : Math.min(150, Math.max(CONTROL_WIDTH, width / 2));
-        buttonWidth = Math.min(buttonWidth, width);
+        int buttonWidth = Math.min(48, width);
         int buttonX = x + width - buttonWidth;
         int labelY = y + Math.max(3, (height - textRenderer.fontHeight) / 2);
         labels.add(new Label(spec("screen.label_colon", field.label), x, labelY, 0xFFC9D4DE, false, Math.max(10, buttonX - x - 8)));
@@ -1877,10 +1784,10 @@ public class HunterWildcardConfigScreen extends Screen {
                 y,
                 buttonWidth,
                 height,
-                enabled ? key("screen.toggle.enabled") : key("screen.toggle.disabled"),
+                enabled ? key("screen.toggle.on_short") : key("screen.toggle.off_short"),
                 "",
                 widget -> toggleBooleanField(field),
-                enabled ? ButtonVariant.TOGGLE_ON : ButtonVariant.TOGGLE_OFF,
+                enabled ? ButtonVariant.SWITCH_ON : ButtonVariant.SWITCH_OFF,
                 canEditField(field)
         );
     }
@@ -1977,9 +1884,7 @@ public class HunterWildcardConfigScreen extends Screen {
         registerContentWidget(dropdownFields.get(field));
     }
 
-    private void addContentToggleField(Layout layout, ToggleField field, int x, int y, int width, int height) {
-        registerContentWidget(addToggleField(field, x, y, width, height));
-    }
+
 
     private void addContentBooleanField(Layout layout, BooleanField field, int x, int y, int width, int height) {
         registerContentWidget(addBooleanField(field, x, buttonY(y), width, height));
@@ -2036,6 +1941,7 @@ public class HunterWildcardConfigScreen extends Screen {
 
     /** Moves every content element by {@code delta} pixels vertically (scrolling without rebuilding the page). */
     private void shiftContent(int delta) {
+        infoHints.replaceAll(hint->new InfoHint(hint.x,hint.y+delta,hint.tooltip));
         labels.replaceAll(label -> new Label(label.text(), label.x(), label.y() + delta, label.color(), label.shadow(), label.width()));
         wrappedLabels.replaceAll(label -> new WrappedLabel(label.text(), label.x(), label.y() + delta, label.height(), label.color(), label.shadow(), label.width(), label.maxLines()));
         boxes.replaceAll(box -> new Box(box.x(), box.y() + delta, box.width(), box.height(), box.color(), box.borderColor()));
@@ -2129,10 +2035,7 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private void updateNavigationScroll(Layout layout) {
-        int pageCount = visiblePages().size();
-        int buttonHeight = 24;
-        int buttonGap = 6;
-        int totalHeight = pageCount * buttonHeight + Math.max(0, pageCount - 1) * buttonGap;
+        float totalHeight = visiblePages().size()*30-6 + RulesSubPage.values().length*24*rulesExpansion;
         maxNavScroll = Math.max(0.0F, totalHeight - navigationHeight(layout));
         navScroll = clamp(navScroll, 0.0F, maxNavScroll);
     }
@@ -2180,22 +2083,22 @@ public class HunterWildcardConfigScreen extends Screen {
 
     private void renderHoverTooltip(DrawContext context) {
         if (!hoverTooltip.isBlank()) {
-            int tooltipWidth = Math.min(360, Math.max(160, width - 24));
+            int tooltipWidth = Math.min(320, Math.max(40, width - 24));
             List<Text> lines = wrapTooltipText(tr(hoverTooltip), tooltipWidth);
             context.drawTooltip(textRenderer, lines, hoverTooltipX, hoverTooltipY);
         }
     }
 
-    private List<Text> wrapTooltipText(String text, int maxWidth) {
+    public List<Text> wrapTooltipText(String text, int maxWidth) {
         List<Text> lines = new ArrayList<>();
-        String remaining = text == null ? "" : text.trim();
-        while (!remaining.isEmpty()) {
-            String line = textRenderer.trimToWidth(remaining, maxWidth);
-            if (line.isBlank()) {
-                line = remaining.substring(0, 1);
+        for(String paragraph:(text==null?"":text).split("\\R",-1)) {
+            String remaining=paragraph.trim();
+            if(remaining.isEmpty()){lines.add(Text.empty());continue;}
+            while(!remaining.isEmpty()) {
+                String line=textRenderer.trimToWidth(remaining,Math.max(1,maxWidth));
+                if(line.isEmpty())line=remaining.substring(0,Character.charCount(remaining.codePointAt(0)));
+                lines.add(Text.literal(line));remaining=remaining.substring(line.length()).stripLeading();
             }
-            lines.add(Text.literal(line));
-            remaining = remaining.substring(line.length()).trim();
         }
         return lines.isEmpty() ? List.of(Text.empty()) : lines;
     }
@@ -2259,10 +2162,8 @@ public class HunterWildcardConfigScreen extends Screen {
         for (DropdownWidget dropdown : dropdownFields.values()) {
             dropdown.close();
         }
-        if (syncRebuildPending) {
-            syncRebuildPending = false;
-            clearAndInit();
-        }
+        // A click still needs the current widget positions and identities to assign focus.
+        // Apply deferred server refreshes in tick, after input dispatch has completed.
     }
 
     private boolean hasExpandedDropdown() {
@@ -2308,6 +2209,7 @@ public class HunterWildcardConfigScreen extends Screen {
 
     private void switchPage(Page page) {
         if (page == currentPage) {
+            if(page==Page.RULES && rulesSubPage!=null) closeSubPage();
             return;
         }
 
@@ -2316,6 +2218,7 @@ public class HunterWildcardConfigScreen extends Screen {
         closeDropdowns();
         rememberCurrentScroll();
         currentPage = page;
+        if(page==Page.RULES) rulesSubPage=null;
         if (page != Page.WILDCARD) {
             selectedWildcardSettings = null;
         }
@@ -2344,34 +2247,12 @@ public class HunterWildcardConfigScreen extends Screen {
         clearAndInit();
     }
 
-    private void setAllWildcards(boolean enabled) {
-        if (!beginConfigEdit()) {
-            return;
-        }
 
-        ConfigSnapshot updated = editableConfig;
-        for (ToggleField field : ToggleField.values()) {
-            updated = setToggle(updated, field, enabled);
-        }
-        editableConfig = updated;
-        clearAndInit();
-    }
 
-    private void setCategoryWildcards(WildcardCategory category, boolean enabled) {
-        if (!beginConfigEdit()) {
-            return;
-        }
 
-        ConfigSnapshot updated = editableConfig;
-        for (ToggleField field : ToggleField.inCategory(category)) {
-            updated = setToggle(updated, field, enabled);
-        }
-        editableConfig = updated;
-        clearAndInit();
-    }
 
     private void openWildcardSettings(ToggleField field) {
-        if (!hasWildcardSettings(field) || editableConfig == null) {
+        if (editableConfig == null) {
             return;
         }
 
@@ -2432,11 +2313,7 @@ public class HunterWildcardConfigScreen extends Screen {
         clearAndInit();
     }
 
-    /**
-     * Folds everything the user typed (including text in fields that have since scrolled out of view) into
-     * {@link #editableConfig}. This never fails: unparsable or empty text reverts to the last valid value and values
-     * below the minimum clamp to it, each with a toast, so navigation, scrolling, toggles and closing are never blocked.
-     */
+    /** Commits valid edits together; invalid raw values remain available for correction. */
     private void commitVisibleInputs() {
         if (editableConfig == null) {
             pendingNumberText.clear();
@@ -2445,29 +2322,32 @@ public class HunterWildcardConfigScreen extends Screen {
         }
 
         ConfigSnapshot updated = editableConfig;
+        java.util.Map<NumberField,Integer> numbers = new java.util.EnumMap<>(NumberField.class);
+        java.util.Set<NumberField> invalidRanges = java.util.EnumSet.noneOf(NumberField.class);
+        for (NumberField f : pendingNumberText.keySet()) if (!validRange(f)) invalidRanges.add(f);
         String firstProblem = null;
         for (Map.Entry<NumberField, String> entry : new ArrayList<>(pendingNumberText.entrySet())) {
             NumberField field = entry.getKey();
             String raw = entry.getValue().trim();
             int value;
             try {
-                value = Integer.parseInt(raw);
+                value = parseNumber(field, raw);
             } catch (NumberFormatException exception) {
                 if (firstProblem == null) {
-                    firstProblem = spec("screen.error.reverted_invalid", field.label);
+                    firstProblem = spec("ui.invalid_field", field.label);
                 }
                 continue;
             }
 
-            if (value < field.minValue) {
-                value = field.minValue;
-                if (firstProblem == null) {
-                    firstProblem = spec("screen.error.min_value", field.label, field.minValue);
-                }
-            }
-            updated = setNumber(updated, field, value);
+            if (value < field.minValue) continue;
+            if (value > maxNumber(field)) continue;
+            if (invalidRanges.contains(field)) continue;
+            numbers.put(field,value);
+            pendingNumberText.remove(field);
+            ConfigDraft.raw.remove(field.name());
         }
 
+        updated = setNumbers(updated,numbers);
         for (Map.Entry<StringField, String> entry : new ArrayList<>(pendingStringText.entrySet())) {
             String value = entry.getValue().trim();
             if (value.isBlank()) {
@@ -2476,12 +2356,14 @@ public class HunterWildcardConfigScreen extends Screen {
                 }
                 continue;
             }
+            if (!validItem(value)) continue;
             updated = setString(updated, entry.getKey(), value);
+            pendingStringText.remove(entry.getKey());
+            ConfigDraft.raw.remove(entry.getKey().name());
         }
 
-        pendingNumberText.clear();
-        pendingStringText.clear();
         editableConfig = updated;
+        ConfigDraft.value = updated;
         syncWidgetsToConfig();
         if (firstProblem != null) {
             showError(firstProblem);
@@ -2494,16 +2376,64 @@ public class HunterWildcardConfigScreen extends Screen {
             return;
         }
         for (Map.Entry<NumberField, TextFieldWidget> entry : numberFields.entrySet()) {
-            String expected = Integer.toString(getNumber(editableConfig, entry.getKey()));
+            if (pendingNumberText.containsKey(entry.getKey())) continue;
+            String expected = formatNumber(entry.getKey(), getNumber(editableConfig, entry.getKey()));
             if (!entry.getValue().getText().equals(expected)) {
                 entry.getValue().setText(expected);
             }
         }
         for (Map.Entry<StringField, TextFieldWidget> entry : stringFields.entrySet()) {
+            if (pendingStringText.containsKey(entry.getKey())) continue;
             String expected = getString(editableConfig, entry.getKey());
             if (!entry.getValue().getText().equals(expected)) {
                 entry.getValue().setText(expected);
             }
+        }
+    }
+
+    private String numberHelp(NumberField field) {
+        if (field.name().endsWith("SECONDS")) return key("ui.number_help.time");
+        if (multiplier(field)) return key("ui.number_help.multiplier");
+        return tr(field.label) + " · " + tr(spec("ui.number_range", formatNumber(field, field.minValue), formatNumber(field, maxNumber(field)))) + " " + tr(numberUnit(field));
+    }
+
+    private boolean validRange(NumberField field) {
+        NumberField min, max;
+        switch (field) {
+            case WILDCARD_INTERVAL_MIN_SECONDS, WILDCARD_INTERVAL_MAX_SECONDS -> { min=NumberField.WILDCARD_INTERVAL_MIN_SECONDS; max=NumberField.WILDCARD_INTERVAL_MAX_SECONDS; }
+            case WILDCARD_DURATION_MIN_SECONDS, WILDCARD_DURATION_MAX_SECONDS -> { min=NumberField.WILDCARD_DURATION_MIN_SECONDS; max=NumberField.WILDCARD_DURATION_MAX_SECONDS; }
+            default -> { return true; }
+        }
+        // A new minimum may extend the previous range; setNumbers raises the unchanged maximum
+        // on commit. When both ends were explicitly edited, retain both for correction.
+        try { return parseNumber(min,pendingNumberText.getOrDefault(min,formatNumber(min,getNumber(editableConfig,min)))) <= parseNumber(max,pendingNumberText.getOrDefault(max,formatNumber(max,getNumber(editableConfig,max))))
+                || (pendingNumberText.containsKey(min) && !pendingNumberText.containsKey(max)); }
+        catch (NumberFormatException e) { return false; }
+    }
+
+    private boolean validateInputs() {
+        for (var e : pendingNumberText.entrySet()) {
+            if (!validNumber(e.getKey(), e.getValue())) { showError(spec("ui.invalid_field", e.getKey().label)); return false; }
+            if (!validRange(e.getKey())) { showError(key("ui.time_range.invalid")); return false; }
+        }
+        for (var e : pendingStringText.entrySet()) if (!validItem(e.getValue())) { showError(key("ui.invalid_item")); return false; }
+        return true;
+    }
+    private void renderInputErrors(DrawContext context) {
+        for (var e : numberFields.entrySet()) {
+            boolean invalid = !validNumber(e.getKey(), e.getValue().getText()) || !validRange(e.getKey());
+            e.getValue().setEditableColor(invalid ? 0xFFEF7181 : 0xFFE8EDF2);
+            String help = !validRange(e.getKey()) ? key("ui.time_range.invalid")
+                    : invalid ? spec("ui.number_range", formatNumber(e.getKey(), e.getKey().minValue), formatNumber(e.getKey(), maxNumber(e.getKey())))
+                    : e.getKey()==NumberField.WILDCARD_DURATION_MIN_SECONDS || e.getKey()==NumberField.WILDCARD_INTERVAL_MIN_SECONDS
+                        ? key("ui.time_range.minimum_help") : numberHelp(e.getKey());
+            e.getValue().setTooltip(net.minecraft.client.gui.tooltip.Tooltip.of(text(help)));
+            if (invalid && e.getValue().visible) context.fill(e.getValue().getX(), e.getValue().getY() + e.getValue().getHeight(), e.getValue().getX() + e.getValue().getWidth(), e.getValue().getY() + e.getValue().getHeight() + 1, 0xFFEF7181);
+        }
+        for (var e : stringFields.entrySet()) {
+            boolean valid = validItem(e.getValue().getText());
+            e.getValue().setEditableColor(valid ? 0xFFE8EDF2 : 0xFFEF7181);
+            e.getValue().setTooltip(valid ? null : net.minecraft.client.gui.tooltip.Tooltip.of(text(key("ui.invalid_item"))));
         }
     }
 
@@ -2522,15 +2452,17 @@ public class HunterWildcardConfigScreen extends Screen {
             return;
         }
 
+        if (!validateInputs()) return;
         commitVisibleInputs();
-        if (!hasUnsavedChanges()) {
+        if (!hasUnsavedChanges() && !ConfigDraft.failed) {
             showInfo(key("screen.info.no_unsaved_changes"));
             return;
         }
 
-        cachedEditableConfig = editableConfig;
+        ConfigDraft.value = editableConfig;
+        ConfigDraft.raw.clear();
         manualSaveRequested = true;
-        sendPayload(new HunterWildcardPackets.UpdateConfigPayload(editableConfig), HunterWildcardPackets.C2S_UPDATE_CONFIG, key("screen.toast.save_submitted"));
+        sendPayload(new HunterWildcardPackets.UpdateConfigPayload(editableConfig, ConfigDraft.base, ConfigDraft.submit(editableConfig)), HunterWildcardPackets.C2S_UPDATE_CONFIG, key("screen.toast.save_submitted"));
     }
 
     private void restoreDefaultConfig() {
@@ -2539,16 +2471,32 @@ public class HunterWildcardConfigScreen extends Screen {
             return;
         }
 
-        ModConfig defaults = new ModConfig();
-        defaults.validate();
-        pendingNumberText.clear();
-        pendingStringText.clear();
-        editableConfig = ConfigSnapshot.from(defaults);
-        cachedEditableConfig = editableConfig;
+        ModConfig defaults = new ModConfig(); defaults.validate();
+        ConfigSnapshot d=ConfigSnapshot.from(defaults);
+        for(NumberField f:new ArrayList<>(numberFields.keySet())) if(canEditField(f)) editableConfig=setNumber(editableConfig,f,getNumber(d,f));
+        for(StringField f:new ArrayList<>(stringFields.keySet())) if(canEditField(f)) editableConfig=setString(editableConfig,f,getString(d,f));
+        for(DropdownField f:new ArrayList<>(dropdownFields.keySet())) if(canEditField(f)) editableConfig=setDropdownValue(editableConfig,f,getDropdownValue(d,f));
+        // Boolean scope follows the active rule subsection; unrelated settings stay untouched.
+        for(BooleanField f:BooleanField.values()) if(canEditField(f) && booleanOnPage(f)) editableConfig=setBoolean(editableConfig,f,getBoolean(d,f));
+        for (NumberField f : numberFields.keySet()) { pendingNumberText.remove(f); ConfigDraft.raw.remove(f.name()); }
+        for (StringField f : stringFields.keySet()) { pendingStringText.remove(f); ConfigDraft.raw.remove(f.name()); }
+        ConfigDraft.value=editableConfig;
         manualReloadRequested = false;
         manualSaveRequested = false;
         showToast(key("screen.toast.default_restored"), StatusKind.INFO);
         clearAndInit();
+    }
+
+    private boolean booleanOnPage(BooleanField f) {
+        if(currentPage!=Page.RULES) return false;
+        if(rulesSubPage==null) return true;
+        return switch(rulesSubPage) {
+            case TIME_BOUNDARY -> f==BooleanField.HUNTER_PREPARE_BOUNDARY_ENABLED;
+            case VICTORY -> f==BooleanField.SURVIVE_BORDER_ENABLED;
+            case RESPAWN -> f==BooleanField.RANDOM_RESPAWN_ENABLED || f==BooleanField.RUNNER_DEATH_NO_DROPS || f==BooleanField.HUNTER_DEATH_NO_DROPS;
+            case KILL_CREDIT -> f==BooleanField.ENVIRONMENT_KILLS_ENABLED;
+            case BALANCE -> f==BooleanField.PIGLIN_PEARL_BOOST_ENABLED || f==BooleanField.BLAZE_ROD_CHANCE_ENABLED || f==BooleanField.LOCATOR_BAR_TEAM_ONLY;
+        };
     }
 
     private void reloadConfig() {
@@ -2557,7 +2505,7 @@ public class HunterWildcardConfigScreen extends Screen {
             return;
         }
 
-        cachedEditableConfig = null;
+        /* draft lifecycle handled by ConfigDraft */
         manualReloadRequested = true;
         sendPayload(new HunterWildcardPackets.ReloadConfigPayload(), HunterWildcardPackets.C2S_RELOAD_CONFIG, key("screen.toast.reload_submitted"));
     }
@@ -2672,45 +2620,30 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private void applySync(SyncConfigPayload payload) {
-        // A periodic sync must never clobber what the user is typing: keep local edits while there are unsaved
-        // changes, uncommitted text or a focused text field.
-        boolean preserveLocalEdits = payload.canManage()
-                && editableConfig != null
-                && !manualReloadRequested
-                && !manualSaveRequested
-                && (hasUnsavedChanges() || hasVisibleInputChanges() || hasFocusedTextField());
+        boolean first = serverSync == null;
+        boolean changed = first || !payload.config().equals(serverSync.config())
+                || payload.canManage() != serverSync.canManage()
+                || payload.debugPageEnabled() != serverSync.debugPageEnabled()
+                || payload.gameState() != serverSync.gameState()
+                || (isRealtimeStatusPage() && (!payload.equals(serverSync)
+                    || !java.util.Objects.equals(displayedDetails, ClientGameStatus.details)));
         serverSync = payload;
         canManage = payload.canManage();
         ensureVisiblePage();
-        if (manualReloadRequested || manualSaveRequested || !preserveLocalEdits) {
+        if (!canManage) {
             editableConfig = payload.config();
-            cachedEditableConfig = null;
-            pendingNumberText.clear();
-            pendingStringText.clear();
+            pendingNumberText.clear(); pendingStringText.clear();
         } else {
-            cachedEditableConfig = editableConfig;
+            if (editableConfig == null || (!hasUnsavedChanges() && !hasVisibleInputChanges() && !hasFocusedTextField()))
+                editableConfig = ConfigDraft.value == null ? payload.config() : ConfigDraft.value;
         }
-
-        if (manualReloadRequested) {
-            showToast(key("screen.toast.server_config_reloaded"), StatusKind.SUCCESS);
-            setFooterStatus("", StatusKind.INFO);
-        } else if (manualSaveRequested) {
-            showToast(key("screen.toast.server_config_saved"), StatusKind.SUCCESS);
-            setFooterStatus("", StatusKind.INFO);
-        } else if (!hasSyncedOnce) {
-            setFooterStatus("", StatusKind.INFO);
-        } else if (key("screen.status.requesting_server").equals(statusMessage) || key("screen.status.waiting_server_sync").equals(statusMessage)) {
-            setFooterStatus("", StatusKind.INFO);
-        }
-
+        if (first && !ConfigDraft.message.isBlank()) setFooterStatus(ConfigDraft.message, ConfigDraft.failed ? StatusKind.ERROR : StatusKind.SUCCESS);
+        else if (first) setFooterStatus("", StatusKind.INFO);
         hasSyncedOnce = true;
-        manualReloadRequested = false;
-        manualSaveRequested = false;
-        if (hasExpandedDropdown()) {
-            syncRebuildPending = true;
-        } else {
-            clearAndInit();
-        }
+        manualSaveRequested = ConfigDraft.pendingId != 0;
+        if (!changed) return;
+        if (hasExpandedDropdown() || hasFocusedTextField()) syncRebuildPending = true;
+        else clearAndInit();
     }
 
     private boolean isDebugPageEnabled() {
@@ -2727,7 +2660,7 @@ public class HunterWildcardConfigScreen extends Screen {
 
     /** Operators may edit at any time; mid-round only fields flagged {@code live} are enabled (see canEditField). */
     private boolean canEditConfig() {
-        return canManage && serverSync != null;
+        return canManage && serverSync != null && ConfigDraft.pendingId == 0;
     }
 
     private String configEditDeniedMessage() {
@@ -2757,187 +2690,12 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private boolean isConfigEditPage() {
-        return currentPage == Page.RULES || currentPage == Page.WILDCARD;
+        return currentPage == Page.RULES || currentPage == Page.WILDCARD || currentPage == Page.CHANGES;
     }
 
     private boolean isHunterKillCountMode() {
         return editableConfig != null
                 && HunterVictoryType.fromConfig(editableConfig.hunterVictoryType(), HunterVictoryType.RUNNERS_OUT) == HunterVictoryType.RUNNER_KILL_COUNT;
-    }
-
-    private int getNumber(ConfigSnapshot config, NumberField field) {
-        return switch (field) {
-            case PREPARING_SECONDS -> config.preparingSeconds();
-            case HUNTER_RESPAWN_SECONDS -> config.hunterRespawnSeconds();
-            case WILDCARD_INTERVAL_SECONDS -> config.wildcardIntervalSeconds();
-            case WILDCARD_DURATION_SECONDS -> config.wildcardDurationSeconds();
-            case WILDCARD_INTERVAL_MIN_SECONDS -> config.wildcardIntervalMinSeconds();
-            case WILDCARD_INTERVAL_MAX_SECONDS -> config.wildcardIntervalMaxSeconds();
-            case WILDCARD_DURATION_MIN_SECONDS -> config.wildcardDurationMinSeconds();
-            case WILDCARD_DURATION_MAX_SECONDS -> config.wildcardDurationMaxSeconds();
-            case HUNTER_RADAR_WARNING_DISTANCE -> config.hunterRadarWarningDistance();
-            case SPACE_SHIFT_INTERVAL_SECONDS -> config.spaceShiftIntervalSeconds();
-            case SUPPLY_DROP_INTERVAL_SECONDS -> config.supplyDropIntervalSeconds();
-            case BLOCK_DECAY_SECONDS -> config.blockDecaySeconds();
-            case PEARL_FRENZY_MAX_PEARLS -> config.pearlFrenzyMaxPearls();
-            case PEARL_FRENZY_INTERVAL_SECONDS -> config.pearlFrenzyIntervalSeconds();
-            case WIND_CHARGE_BRAWL_INTERVAL_SECONDS -> config.windChargeBrawlIntervalSeconds();
-            case WIND_CHARGE_EXPLOSION_MULTIPLIER_PERCENT -> config.windChargeExplosionMultiplierPercent();
-            case BACKROOMS_DURATION_SECONDS -> config.backroomsDurationSeconds();
-            case HUNTER_PREPARE_BOUNDARY_RADIUS -> config.hunterPrepareBoundaryRadius();
-            case PIGLIN_PEARL_CHANCE_PERCENT -> config.piglinPearlChancePercent();
-            case HUNTER_DAMAGE_MULTIPLIER_PERCENT -> config.hunterDamageMultiplierPercent();
-            case HUNTER_SPEED_PERCENT -> config.hunterSpeedPercent();
-            case RUNNER_SPEED_PERCENT -> config.runnerSpeedPercent();
-            case HUNTER_HIT_CREDIT_SECONDS -> config.hunterHitCreditSeconds();
-            case ENVIRONMENT_DEATHS_PER_KILL -> config.environmentDeathsPerKill();
-            case RUNNER_RESPAWN_DISTANCE -> config.runnerRespawnDistance();
-            case HUNTER_RESPAWN_DISTANCE -> config.hunterRespawnDistance();
-            case HUNTER_RESPAWN_RUNNER_CLEARANCE -> config.hunterRespawnRunnerClearance();
-            case HUNTER_RESPAWN_PENALTY_SECONDS -> config.hunterRespawnPenaltySeconds();
-            case SURVIVE_TIME_SECONDS -> config.surviveTimeSeconds();
-            case SURVIVE_BORDER_RADIUS -> config.surviveBorderRadius();
-            case TARGET_X -> config.targetX();
-            case TARGET_Y -> config.targetY();
-            case TARGET_Z -> config.targetZ();
-            case TARGET_RADIUS -> config.targetRadius();
-            case TARGET_ITEM_COUNT -> config.targetItemCount();
-            case HUNTER_LIVES -> config.hunterLives();
-            case RUNNER_LIVES -> config.runnerLives();
-            case RUNNER_RESPAWN_SECONDS -> config.runnerRespawnSeconds();
-            case HUNTER_RUNNER_KILL_TARGET -> config.hunterRunnerKillTarget();
-        };
-    }
-
-    private ConfigSnapshot setNumber(ConfigSnapshot config, NumberField field, int value) {
-        ModConfig copy = config.toConfig();
-        switch (field) {
-            case PREPARING_SECONDS -> copy.preparingSeconds = value;
-            case HUNTER_RESPAWN_SECONDS -> copy.hunterRespawnSeconds = value;
-            case WILDCARD_INTERVAL_SECONDS -> copy.wildcardIntervalSeconds = value;
-            case WILDCARD_DURATION_SECONDS -> copy.wildcardDurationSeconds = value;
-            case WILDCARD_INTERVAL_MIN_SECONDS -> copy.wildcardIntervalMinSeconds = value;
-            case WILDCARD_INTERVAL_MAX_SECONDS -> copy.wildcardIntervalMaxSeconds = value;
-            case WILDCARD_DURATION_MIN_SECONDS -> copy.wildcardDurationMinSeconds = value;
-            case WILDCARD_DURATION_MAX_SECONDS -> copy.wildcardDurationMaxSeconds = value;
-            case HUNTER_RADAR_WARNING_DISTANCE -> copy.hunterRadarWarningDistance = value;
-            case SPACE_SHIFT_INTERVAL_SECONDS -> copy.spaceShiftIntervalSeconds = value;
-            case SUPPLY_DROP_INTERVAL_SECONDS -> copy.supplyDropIntervalSeconds = value;
-            case BLOCK_DECAY_SECONDS -> copy.blockDecaySeconds = value;
-            case PEARL_FRENZY_MAX_PEARLS -> copy.pearlFrenzyMaxPearls = value;
-            case PEARL_FRENZY_INTERVAL_SECONDS -> copy.pearlFrenzyIntervalSeconds = value;
-            case WIND_CHARGE_BRAWL_INTERVAL_SECONDS -> copy.windChargeBrawlIntervalSeconds = value;
-            case WIND_CHARGE_EXPLOSION_MULTIPLIER_PERCENT -> copy.windChargeExplosionMultiplierPercent = value;
-            case BACKROOMS_DURATION_SECONDS -> copy.backroomsDurationSeconds = value;
-            case HUNTER_PREPARE_BOUNDARY_RADIUS -> copy.hunterPrepareBoundaryRadius = value;
-            case PIGLIN_PEARL_CHANCE_PERCENT -> copy.piglinPearlChancePercent = value;
-            case HUNTER_DAMAGE_MULTIPLIER_PERCENT -> copy.hunterDamageMultiplierPercent = value;
-            case HUNTER_SPEED_PERCENT -> copy.hunterSpeedPercent = value;
-            case RUNNER_SPEED_PERCENT -> copy.runnerSpeedPercent = value;
-            case HUNTER_HIT_CREDIT_SECONDS -> copy.hunterHitCreditSeconds = value;
-            case ENVIRONMENT_DEATHS_PER_KILL -> copy.environmentDeathsPerKill = value;
-            case RUNNER_RESPAWN_DISTANCE -> copy.runnerRespawnDistance = value;
-            case HUNTER_RESPAWN_DISTANCE -> copy.hunterRespawnDistance = value;
-            case HUNTER_RESPAWN_RUNNER_CLEARANCE -> copy.hunterRespawnRunnerClearance = value;
-            case HUNTER_RESPAWN_PENALTY_SECONDS -> copy.hunterRespawnPenaltySeconds = value;
-            case SURVIVE_TIME_SECONDS -> copy.surviveTimeSeconds = value;
-            case SURVIVE_BORDER_RADIUS -> copy.surviveBorderRadius = value;
-            case TARGET_X -> copy.targetX = value;
-            case TARGET_Y -> copy.targetY = value;
-            case TARGET_Z -> copy.targetZ = value;
-            case TARGET_RADIUS -> copy.targetRadius = value;
-            case TARGET_ITEM_COUNT -> copy.targetItemCount = value;
-            case HUNTER_LIVES -> copy.hunterLives = value;
-            case RUNNER_LIVES -> copy.runnerLives = value;
-            case RUNNER_RESPAWN_SECONDS -> copy.runnerRespawnSeconds = value;
-            case HUNTER_RUNNER_KILL_TARGET -> copy.hunterRunnerKillTarget = value;
-        }
-        copy.validate();
-        return ConfigSnapshot.from(copy);
-    }
-
-    private String getString(ConfigSnapshot config, StringField field) {
-        return switch (field) {
-            case TARGET_ITEM_ID -> config.targetItemId();
-        };
-    }
-
-    private ConfigSnapshot setString(ConfigSnapshot config, StringField field, String value) {
-        ModConfig copy = config.toConfig();
-        switch (field) {
-            case TARGET_ITEM_ID -> copy.targetItemId = value;
-        }
-        copy.validate();
-        return ConfigSnapshot.from(copy);
-    }
-
-    private String getDropdownValue(ConfigSnapshot config, DropdownField field) {
-        return switch (field) {
-            case RUNNER_VICTORY_TYPE -> config.runnerVictoryType();
-            case HUNTER_VICTORY_TYPE -> config.hunterVictoryType();
-            case HUNTER_RESPAWN_MODE -> config.hunterRespawnMode();
-            case RUNNER_RESPAWN_MODE -> config.runnerRespawnMode();
-            case RUNNER_TEAM_LOSS_MODE -> config.runnerTeamLossMode();
-            case TARGET_DIMENSION -> config.targetDimension();
-            case WILDCARD_INTERVAL_MODE -> config.wildcardIntervalMode();
-            case WILDCARD_DURATION_MODE -> config.wildcardDurationMode();
-        };
-    }
-
-    private ConfigSnapshot setDropdownValue(ConfigSnapshot config, DropdownField field, String value) {
-        ModConfig copy = config.toConfig();
-        switch (field) {
-            case RUNNER_VICTORY_TYPE -> copy.runnerVictoryType = value;
-            case HUNTER_VICTORY_TYPE -> copy.hunterVictoryType = value;
-            case HUNTER_RESPAWN_MODE -> copy.hunterRespawnMode = value;
-            case RUNNER_RESPAWN_MODE -> copy.runnerRespawnMode = value;
-            case RUNNER_TEAM_LOSS_MODE -> copy.runnerTeamLossMode = value;
-            case TARGET_DIMENSION -> copy.targetDimension = value;
-            case WILDCARD_INTERVAL_MODE -> copy.wildcardIntervalMode = value;
-            case WILDCARD_DURATION_MODE -> copy.wildcardDurationMode = value;
-        }
-        copy.validate();
-        return ConfigSnapshot.from(copy);
-    }
-
-    private boolean getToggle(ConfigSnapshot config, ToggleField field) {
-        return config.enabledWildcards().getOrDefault(field.id, Boolean.TRUE);
-    }
-
-    private ConfigSnapshot setToggle(ConfigSnapshot config, ToggleField field, boolean value) {
-        ModConfig copy = config.toConfig();
-        copy.enabledWildcards.put(field.id, value);
-        copy.validate();
-        return ConfigSnapshot.from(copy);
-    }
-
-    private boolean getBoolean(ConfigSnapshot config, BooleanField field) {
-        return switch (field) {
-            case HUNTER_PREPARE_BOUNDARY_ENABLED -> config.hunterPrepareBoundaryEnabled();
-            case ENVIRONMENT_KILLS_ENABLED -> config.environmentKillsEnabled();
-            case RUNNER_DEATH_NO_DROPS -> config.runnerDeathNoDrops();
-            case HUNTER_DEATH_NO_DROPS -> config.hunterDeathNoDrops();
-            case PIGLIN_PEARL_BOOST_ENABLED -> config.piglinPearlBoostEnabled();
-            case RANDOM_RESPAWN_ENABLED -> config.randomRespawnEnabled();
-            case LOCATOR_BAR_TEAM_ONLY -> config.locatorBarTeamOnly();
-            case SURVIVE_BORDER_ENABLED -> config.surviveBorderEnabled();
-        };
-    }
-
-    private ConfigSnapshot setBoolean(ConfigSnapshot config, BooleanField field, boolean value) {
-        ModConfig copy = config.toConfig();
-        switch (field) {
-            case HUNTER_PREPARE_BOUNDARY_ENABLED -> copy.hunterPrepareBoundaryEnabled = value;
-            case ENVIRONMENT_KILLS_ENABLED -> copy.environmentKillsEnabled = value;
-            case RUNNER_DEATH_NO_DROPS -> copy.runnerDeathNoDrops = value;
-            case HUNTER_DEATH_NO_DROPS -> copy.hunterDeathNoDrops = value;
-            case PIGLIN_PEARL_BOOST_ENABLED -> copy.piglinPearlBoostEnabled = value;
-            case RANDOM_RESPAWN_ENABLED -> copy.randomRespawnEnabled = value;
-            case LOCATOR_BAR_TEAM_ONLY -> copy.locatorBarTeamOnly = value;
-            case SURVIVE_BORDER_ENABLED -> copy.surviveBorderEnabled = value;
-        }
-        copy.validate();
-        return ConfigSnapshot.from(copy);
     }
 
     private String stateName(GameState state) {
@@ -2954,7 +2712,7 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private String formatSeconds(int seconds) {
-        return seconds < 0 ? key("common.none") : spec("screen.time.seconds", seconds);
+        return tr(seconds < 0 ? key("common.none") : spec("screen.time.seconds", seconds));
     }
 
     private String wildcardDisplayName() {
@@ -2964,10 +2722,7 @@ public class HunterWildcardConfigScreen extends Screen {
         return HunterWildcardText.wildcardNameKey(serverSync.activeWildcard());
     }
 
-    private String compactWildcardDisplayName() {
-        String name = wildcardDisplayName();
-        return key("screen.wildcard.none_active").equals(name) ? key("common.none") : name;
-    }
+
 
     private boolean hasWildcardSettings(ToggleField field) {
         return field == ToggleField.HUNTER_RADAR
@@ -3005,22 +2760,7 @@ public class HunterWildcardConfigScreen extends Screen {
         return "";
     }
 
-    private String startConditionDisplay(String startTooltip) {
-        if (startTooltip == null || startTooltip.isBlank()) {
-            return key("screen.start_condition.met");
-        }
 
-        if (key("screen.error.start_need_teams").equals(startTooltip)) {
-            return key("screen.start_condition.need_teams");
-        }
-        if (key("screen.error.start_op_only").equals(startTooltip)) {
-            return key("screen.start_condition.op_only");
-        }
-        if (key("screen.error.start_waiting_only").equals(startTooltip)) {
-            return key("screen.start_condition.waiting_only");
-        }
-        return startTooltip;
-    }
 
     private int wildcardToggleColumns(int width) {
         if (width >= 420) {
@@ -3029,15 +2769,7 @@ public class HunterWildcardConfigScreen extends Screen {
         return 1;
     }
 
-    private int teamButtonColumns(int width) {
-        if (width >= 620) {
-            return 3;
-        }
-        if (width >= 380) {
-            return 2;
-        }
-        return 1;
-    }
+
 
     private String trim(String text, int width) {
         return textRenderer.trimToWidth(text, Math.max(10, width));
@@ -3088,21 +2820,21 @@ public class HunterWildcardConfigScreen extends Screen {
         }
 
         if (isConfigEditPage()) {
+            if(ConfigDraft.pendingId!=0){segments.add(new StatusSegment(key("ui.saving"),0xFFF0C76B));return segments;}
+            if(ConfigDraft.conflict()){segments.add(new StatusSegment(key("ui.save.conflict"),0xFFEF7181));return segments;}
             String modeText = canEditConfig()
                     ? (isRoundRunning() ? key("screen.footer.config_live") : key("screen.footer.config_editable"))
                     : key("screen.footer.config_readonly");
-            int modeColor = canEditConfig() ? 0xFF7FC2FF : 0xFF9FAAB4;
+            int modeColor = canEditConfig() ? 0xFF78B8FA : 0xFF9FAAB4;
             segments.add(new StatusSegment(modeText, modeColor));
-            if (hasUnsavedChanges()) {
-                segments.add(new StatusSegment(key("screen.footer.unsaved"), 0xFFFFB347));
-            }
             if (!statusMessage.isBlank() && (statusKind == StatusKind.ERROR || !hasUnsavedChanges())) {
                 segments.add(new StatusSegment(statusMessage, statusKind.color));
             }
             return segments;
         }
 
-        if (!statusMessage.isBlank()) {
+        if(currentPage==Page.GAME && serverSync.gameState()==GameState.WAITING && !startGameTooltip(true).isBlank()) segments.add(new StatusSegment(startGameTooltip(true),0xFFF0C76B));
+        else if (!statusMessage.isBlank()) {
             segments.add(new StatusSegment(statusMessage, statusKind.color));
         }
         return segments;
@@ -3116,7 +2848,7 @@ public class HunterWildcardConfigScreen extends Screen {
         return canEditConfig()
                 && editableConfig != null
                 && serverSync != null
-                && (hasUnsavedChanges() || hasVisibleInputChanges());
+                && (hasUnsavedChanges() || hasVisibleInputChanges() || ConfigDraft.failed);
     }
 
     private boolean hasVisibleInputChanges() {
@@ -3127,10 +2859,7 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private boolean hasFocusedTextField() {
-        if (focusedInputKey != null) {
-            return true;
-        }
-
+        if (wildcardSearch != null && wildcardSearch.isFocused()) return true;
         for (TextFieldWidget field : numberFields.values()) {
             if (field.isFocused()) {
                 return true;
@@ -3176,19 +2905,19 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private Layout layout() {
-        int panelWidth = Math.min(1120, Math.max(360, width - 24));
+        int panelWidth = Math.min(720, Math.max(360, width - 48));
         if (panelWidth > width - 8) {
             panelWidth = Math.max(220, width - 8);
         }
 
-        int panelHeight = Math.min(520, Math.max(260, height - 24));
+        int panelHeight = Math.min(420, Math.max(260, height - 48));
         if (panelHeight > height - 8) {
             panelHeight = Math.max(200, height - 8);
         }
 
         int panelX = (width - panelWidth) / 2;
         int panelY = (height - panelHeight) / 2;
-        int navWidth = panelWidth < 520 ? 92 : panelWidth < 760 ? 104 : 116;
+        int navWidth = panelWidth < 520 ? 88 : 96;
         int contentGap = panelWidth < 760 ? 12 : 16;
         int rightPadding = panelWidth < 760 ? 10 : 12;
         int contentX = panelX + navWidth + contentGap;
@@ -3243,8 +2972,7 @@ public class HunterWildcardConfigScreen extends Screen {
         }
 
         void info(String label, String value, int valueColor) {
-            addInfoRow(layout, label, value, contentX(), cursorY, contentWidth(), valueColor);
-            advanceRow();
+            advanceTo(addInfoRow(layout, label, value, contentX(), cursorY, contentWidth(), valueColor));
         }
 
         void number(NumberField field) {
@@ -3252,10 +2980,12 @@ public class HunterWildcardConfigScreen extends Screen {
         }
 
         void number(NumberField field, boolean editable) {
+            if(overviewReadOnly && !editable)return;
             advanceTo(addInputRow(layout, field, contentX(), cursorY, contentWidth(), editable));
         }
 
         void coordinates(NumberField xField, NumberField yField, NumberField zField) {
+            if(overviewReadOnly){info(key("screen.field.coordinates"),getNumber(editableConfig,xField)+", "+getNumber(editableConfig,yField)+", "+getNumber(editableConfig,zField),0xFFE8EDF2);return;}
             int nextY = addCoordinateRow(layout, xField, yField, zField, contentX(), cursorY, contentWidth());
             bottomY = Math.max(bottomY, nextY - ROW_GAP);
             cursorY = nextY;
@@ -3289,11 +3019,11 @@ public class HunterWildcardConfigScreen extends Screen {
         }
 
         void booleanField(BooleanField field) {
-            addToggleRow(layout, field, contentX(), cursorY, contentWidth());
-            advanceRow();
+            advanceTo(addToggleRow(layout, field, contentX(), cursorY, contentWidth()));
         }
 
         void hint(String text) {
+            if(overviewReadOnly)return;
             int hintY = cursorY + 2;
             int hintHeight = hintHeight(text, contentWidth());
             addHintText(layout, text, contentX(), hintY, contentWidth());
@@ -3301,11 +3031,25 @@ public class HunterWildcardConfigScreen extends Screen {
             cursorY = hintY + hintHeight + ROW_GAP;
         }
 
+        private int actionOffset;
+        void inlineAction(String title, ButtonWidget.PressAction action, ButtonVariant variant, boolean enabled, int maxWidth) {
+            int actionWidth=Math.min(contentWidth(),Math.min(maxWidth,textRenderer.getWidth(tr(title))+8));
+            if(actionOffset+actionWidth>contentWidth()) endActions();
+            addContentButton(layout,contentX()+actionOffset,cursorY,actionWidth,20,title,"",action,variant,enabled);
+            actionOffset+=actionWidth+12;
+        }
+        void endActions() {
+            if(actionOffset>0){gap(24);actionOffset=0;}
+        }
+
         void button(String title, ButtonWidget.PressAction action, ButtonVariant variant, boolean enabled, int maxWidth) {
-            buttonGrid(List.of(new ButtonSpec(title, action, variant, enabled)), 1, maxWidth);
+            int buttonWidth=Math.min(contentWidth(),Math.min(maxWidth,Math.max(60,textRenderer.getWidth(tr(title))+20)));
+            addContentButton(layout,contentX(),cursorY,buttonWidth,20,title,"",action,variant,enabled);
+            gap(24);
         }
 
         void buttonGrid(List<ButtonSpec> buttons, int requestedColumns, int maxButtonWidth) {
+            if(overviewReadOnly) return;
             int nextY = addButtonRow(layout, buttons, contentX(), cursorY, contentWidth(), requestedColumns, maxButtonWidth);
             bottomY = Math.max(bottomY, nextY - ROW_GAP);
             cursorY = nextY;
@@ -3335,34 +3079,7 @@ public class HunterWildcardConfigScreen extends Screen {
             buttonGrid(buttons, Math.min(2, buttons.size()), 112);
         }
 
-        void toggleGrid(ToggleField[] fields, int requestedColumns) {
-            int gap = 8;
-            int columns = Math.max(1, Math.min(requestedColumns, fields.length));
-            while (columns > 1 && (contentWidth() - (columns - 1) * gap) / columns < 118) {
-                columns--;
-            }
 
-            int itemWidth = Math.min(WILDCARD_TOGGLE_MAX_WIDTH, Math.max(80, (contentWidth() - (columns - 1) * gap) / columns));
-            int gridWidth = itemWidth * columns + (columns - 1) * gap;
-            int gridX = contentX() + Math.max(0, (contentWidth() - gridWidth) / 2);
-            int rows = (fields.length + columns - 1) / columns;
-            for (int i = 0; i < fields.length; i++) {
-                ToggleField field = fields[i];
-                int column = i % columns;
-                int row = i / columns;
-                addWildcardToggleTile(
-                        layout,
-                        field,
-                        gridX + column * (itemWidth + gap),
-                        cursorY + row * (WILDCARD_TOGGLE_HEIGHT + gap),
-                        itemWidth,
-                        WILDCARD_TOGGLE_HEIGHT
-                );
-            }
-            int nextY = cursorY + rows * WILDCARD_TOGGLE_HEIGHT + (rows - 1) * gap + ROW_GAP;
-            bottomY = Math.max(bottomY, nextY - ROW_GAP);
-            cursorY = nextY;
-        }
 
         int height() {
             return Math.max(CARD_PADDING_TOP + CARD_TITLE_HEIGHT + CARD_PADDING_BOTTOM, bottomY - y + CARD_PADDING_BOTTOM);
@@ -3374,7 +3091,9 @@ public class HunterWildcardConfigScreen extends Screen {
 
         int finish(int forcedHeight) {
             if (!finished) {
-                drawCardBorder(layout, x, y, width, forcedHeight);
+                int accent=teamAccent(title);
+                if(accent!=0xFFFFFFFF) boxes.add(new Box(x,y,width,forcedHeight,accent==0xFFEF7181?0xF02C222B:0xF01E2B39,accent));
+                else drawCardBorder(layout, x, y, width, forcedHeight);
                 finished = true;
             }
             return y + forcedHeight;
@@ -3412,6 +3131,8 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     private enum Page {
+        RESULT(key("ui.result"), key("ui.result.description")),
+        CHANGES(key("ui.changes"), key("ui.changes.description")),
         GAME(key("screen.page.game"), key("screen.page.game.description")),
         RULES(key("screen.page.rules"), key("screen.page.rules.description")),
         WILDCARD(key("screen.page.wildcard"), key("screen.page.wildcard.description")),
@@ -3444,219 +3165,11 @@ public class HunterWildcardConfigScreen extends Screen {
     }
 
     /** {@code live}: may be changed by an operator while a round is PREPARING/RUNNING. */
-    private enum NumberField {
-        PREPARING_SECONDS(key("config.number.preparing_seconds"), key("unit.seconds"), 1, false),
-        HUNTER_RESPAWN_SECONDS(key("config.number.hunter_respawn_seconds"), key("unit.seconds"), 1, true),
-        WILDCARD_INTERVAL_SECONDS(key("config.number.wildcard_interval_seconds"), key("unit.seconds"), 1, true),
-        WILDCARD_DURATION_SECONDS(key("config.number.wildcard_duration_seconds"), key("unit.seconds"), 1, true),
-        WILDCARD_INTERVAL_MIN_SECONDS(key("config.number.wildcard_interval_min_seconds"), key("unit.seconds"), 1, true),
-        WILDCARD_INTERVAL_MAX_SECONDS(key("config.number.wildcard_interval_max_seconds"), key("unit.seconds"), 1, true),
-        WILDCARD_DURATION_MIN_SECONDS(key("config.number.wildcard_duration_min_seconds"), key("unit.seconds"), 1, true),
-        WILDCARD_DURATION_MAX_SECONDS(key("config.number.wildcard_duration_max_seconds"), key("unit.seconds"), 1, true),
-        HUNTER_RADAR_WARNING_DISTANCE(key("config.number.hunter_radar_warning_distance"), key("unit.blocks"), 1, true),
-        SPACE_SHIFT_INTERVAL_SECONDS(key("config.number.space_shift_interval_seconds"), key("unit.seconds"), 1, true),
-        SUPPLY_DROP_INTERVAL_SECONDS(key("config.number.supply_drop_interval_seconds"), key("unit.seconds"), 1, true),
-        BLOCK_DECAY_SECONDS(key("config.number.block_decay_seconds"), key("unit.seconds"), 1, true),
-        PEARL_FRENZY_MAX_PEARLS(key("config.number.pearl_frenzy_max_pearls"), key("unit.items"), 1, true),
-        PEARL_FRENZY_INTERVAL_SECONDS(key("config.number.pearl_frenzy_interval_seconds"), key("unit.seconds"), 1, true),
-        WIND_CHARGE_BRAWL_INTERVAL_SECONDS(key("config.number.wind_charge_brawl_interval_seconds"), key("unit.seconds"), 1, true),
-        WIND_CHARGE_EXPLOSION_MULTIPLIER_PERCENT(key("config.number.wind_charge_explosion_multiplier_percent"), key("unit.percent"), 1, true),
-        BACKROOMS_DURATION_SECONDS(key("config.number.backrooms_duration_seconds"), key("unit.seconds"), 1, true),
-        HUNTER_PREPARE_BOUNDARY_RADIUS(key("config.number.hunter_prepare_boundary_radius"), key("unit.blocks"), 1, false),
-        PIGLIN_PEARL_CHANCE_PERCENT(key("config.number.piglin_pearl_chance_percent"), key("unit.percent"), 0, true),
-        HUNTER_DAMAGE_MULTIPLIER_PERCENT(key("config.number.hunter_damage_multiplier_percent"), key("unit.percent"), 1, true),
-        HUNTER_SPEED_PERCENT(key("config.number.hunter_speed_percent"), key("unit.percent"), 10, true),
-        RUNNER_SPEED_PERCENT(key("config.number.runner_speed_percent"), key("unit.percent"), 10, true),
-        HUNTER_HIT_CREDIT_SECONDS(key("config.number.hunter_hit_credit_seconds"), key("unit.seconds"), 0, true),
-        ENVIRONMENT_DEATHS_PER_KILL(key("config.number.environment_deaths_per_kill"), key("unit.times"), 1, true),
-        RUNNER_RESPAWN_DISTANCE(key("config.number.runner_respawn_distance"), key("unit.blocks"), 16, true),
-        HUNTER_RESPAWN_DISTANCE(key("config.number.hunter_respawn_distance"), key("unit.blocks"), 16, true),
-        HUNTER_RESPAWN_RUNNER_CLEARANCE(key("config.number.hunter_respawn_runner_clearance"), key("unit.blocks"), 0, true),
-        HUNTER_RESPAWN_PENALTY_SECONDS(key("config.number.hunter_respawn_penalty_seconds"), key("unit.seconds"), 0, true),
-        SURVIVE_TIME_SECONDS(key("config.number.survive_time_seconds"), key("unit.seconds"), 1, true),
-        SURVIVE_BORDER_RADIUS(key("config.number.survive_border_radius"), key("unit.blocks"), 32, false),
-        TARGET_X(key("config.number.target_x"), "", Integer.MIN_VALUE, true),
-        TARGET_Y(key("config.number.target_y"), "", Integer.MIN_VALUE, true),
-        TARGET_Z(key("config.number.target_z"), "", Integer.MIN_VALUE, true),
-        TARGET_RADIUS(key("config.number.target_radius"), key("unit.blocks"), 1, true),
-        TARGET_ITEM_COUNT(key("config.number.target_item_count"), key("unit.items"), 1, true),
-        HUNTER_LIVES(key("config.number.hunter_lives"), key("unit.lives"), 0, false),
-        RUNNER_LIVES(key("config.number.runner_lives"), key("unit.lives"), 1, false),
-        RUNNER_RESPAWN_SECONDS(key("config.number.runner_respawn_seconds"), key("unit.seconds"), 1, true),
-        HUNTER_RUNNER_KILL_TARGET(key("config.number.hunter_runner_kill_target"), key("unit.times"), 1, true);
-
-        private final String label;
-        private final String unit;
-        private final int minValue;
-        private final boolean live;
-
-        NumberField(String label, String unit, int minValue, boolean live) {
-            this.label = label;
-            this.unit = unit;
-            this.minValue = minValue;
-            this.live = live;
-        }
-
-        private boolean allowsNegative() {
-            return minValue < 0;
-        }
-    }
-
-    private enum StringField {
-        TARGET_ITEM_ID(key("config.string.target_item_id"), 128, true);
-
-        private final String label;
-        private final int maxLength;
-        private final boolean live;
-
-        StringField(String label, int maxLength, boolean live) {
-            this.label = label;
-            this.maxLength = maxLength;
-            this.live = live;
-        }
-    }
-
-    private enum DropdownField {
-        WILDCARD_INTERVAL_MODE(key("config.dropdown.wildcard_interval_mode"), true, List.of(
-                option("FIXED", key("config.timing_mode.fixed")),
-                option("RANDOM", key("config.timing_mode.random"))
-        )),
-        WILDCARD_DURATION_MODE(key("config.dropdown.wildcard_duration_mode"), true, List.of(
-                option("FIXED", key("config.timing_mode.fixed")),
-                option("RANDOM", key("config.timing_mode.random"))
-        )),
-        RUNNER_VICTORY_TYPE(key("config.dropdown.runner_victory_type"), false, List.of(
-                option(RunnerVictoryType.DRAGON.name(), RunnerVictoryType.DRAGON.getDisplayName()),
-                option(RunnerVictoryType.SURVIVE_TIME.name(), RunnerVictoryType.SURVIVE_TIME.getDisplayName()),
-                option(RunnerVictoryType.REACH_LOCATION.name(), RunnerVictoryType.REACH_LOCATION.getDisplayName()),
-                option(RunnerVictoryType.COLLECT_ITEM.name(), RunnerVictoryType.COLLECT_ITEM.getDisplayName())
-        )),
-        HUNTER_VICTORY_TYPE(key("config.dropdown.hunter_victory_type"), false, List.of(
-                option(HunterVictoryType.RUNNERS_OUT.name(), HunterVictoryType.RUNNERS_OUT.getDisplayName()),
-                option(HunterVictoryType.RUNNER_KILL_COUNT.name(), HunterVictoryType.RUNNER_KILL_COUNT.getDisplayName())
-        )),
-        HUNTER_RESPAWN_MODE(key("config.dropdown.hunter_respawn_mode"), false, List.of(
-                option(RespawnMode.INFINITE.name(), key("config.respawn_mode.infinite")),
-                option(RespawnMode.LIMITED_LIVES.name(), key("config.respawn_mode.limited_lives")),
-                option(RespawnMode.NO_RESPAWN.name(), key("config.respawn_mode.no_respawn"))
-        )),
-        RUNNER_RESPAWN_MODE(key("config.dropdown.runner_respawn_mode"), false, List.of(
-                option(RespawnMode.INFINITE.name(), key("config.respawn_mode.infinite")),
-                option(RespawnMode.LIMITED_LIVES.name(), key("config.respawn_mode.limited_lives")),
-                option(RespawnMode.NO_RESPAWN.name(), key("config.respawn_mode.no_respawn"))
-        )),
-        RUNNER_TEAM_LOSS_MODE(key("config.dropdown.runner_team_loss_mode"), true, List.of(
-                option(RunnerTeamLossMode.ANY_RUNNER_OUT.name(), key("config.runner_team_loss.any_runner_out")),
-                option(RunnerTeamLossMode.ALL_RUNNERS_OUT.name(), key("config.runner_team_loss.all_runners_out"))
-        )),
-        TARGET_DIMENSION(key("config.dropdown.target_dimension"), true, List.of(
-                option("minecraft:overworld", key("config.dimension.overworld")),
-                option("minecraft:the_nether", key("config.dimension.the_nether")),
-                option("minecraft:the_end", key("config.dimension.the_end"))
-        ));
-
-        private final String label;
-        private final boolean live;
-        private final List<DropdownWidget.Option> options;
-
-        DropdownField(String label, boolean live, List<DropdownWidget.Option> options) {
-            this.label = label;
-            this.live = live;
-            this.options = options;
-        }
-    }
-
-    private static DropdownWidget.Option option(String value, String displayName) {
-        return new DropdownWidget.Option(value, displayName);
-    }
-
-    private enum BooleanField {
-        HUNTER_PREPARE_BOUNDARY_ENABLED(key("config.boolean.hunter_prepare_boundary_enabled"), false),
-        RUNNER_DEATH_NO_DROPS(key("config.boolean.runner_death_no_drops"), true),
-        HUNTER_DEATH_NO_DROPS(key("config.boolean.hunter_death_no_drops"), true),
-        PIGLIN_PEARL_BOOST_ENABLED(key("config.boolean.piglin_pearl_boost_enabled"), true),
-        RANDOM_RESPAWN_ENABLED(key("config.boolean.random_respawn_enabled"), true),
-        LOCATOR_BAR_TEAM_ONLY(key("config.boolean.locator_bar_team_only"), true),
-        SURVIVE_BORDER_ENABLED(key("config.boolean.survive_border_enabled"), false),
-        ENVIRONMENT_KILLS_ENABLED(key("config.boolean.environment_kills_enabled"), true);
-
-        private final String label;
-        private final boolean live;
-
-        BooleanField(String label, boolean live) {
-            this.label = label;
-            this.live = live;
-        }
-    }
-
-    private enum WildcardCategory {
-        COMBAT(key("screen.wildcard_category.combat")),
-        MOBILITY(key("screen.wildcard_category.mobility")),
-        VISION(key("screen.wildcard_category.vision")),
-        WORLD(key("screen.wildcard_category.world"));
-
-        private final String label;
-
-        WildcardCategory(String label) {
-            this.label = label;
-        }
-    }
-
-    /** Same order as {@link WildcardIds#ALL}, grouped by category for the toggle page. */
-    private enum ToggleField {
-        BACKSTAB(WildcardIds.BACKSTAB, WildcardCategory.COMBAT),
-        VAMPIRE(WildcardIds.VAMPIRE, WildcardCategory.COMBAT),
-        BLOOD_RAGE(WildcardIds.BLOOD_RAGE, WildcardCategory.COMBAT),
-        WEAPON_OVERHEAT(WildcardIds.WEAPON_OVERHEAT, WildcardCategory.COMBAT),
-        STAY_AWAY(WildcardIds.STAY_AWAY, WildcardCategory.COMBAT),
-        FRAGILE(WildcardIds.FRAGILE, WildcardCategory.COMBAT),
-        EXPLOSIVE_DEATH(WildcardIds.EXPLOSIVE_DEATH, WildcardCategory.COMBAT),
-        KEY_SCRAMBLE(WildcardIds.KEY_SCRAMBLE, WildcardCategory.COMBAT),
-        FLASH(WildcardIds.FLASH, WildcardCategory.MOBILITY),
-        SHADOW_STEP(WildcardIds.SHADOW_STEP, WildcardCategory.MOBILITY),
-        HURT_TELEPORT(WildcardIds.HURT_TELEPORT, WildcardCategory.MOBILITY),
-        SPACE_SHIFT(WildcardIds.SPACE_SHIFT, WildcardCategory.MOBILITY),
-        PORTAL(WildcardIds.PORTAL, WildcardCategory.MOBILITY),
-        PEARL_FRENZY(WildcardIds.PEARL_FRENZY, WildcardCategory.MOBILITY),
-        WIND_CHARGE_BRAWL(WildcardIds.WIND_CHARGE_BRAWL, WildcardCategory.MOBILITY),
-        LIGHT_LOAD(WildcardIds.LIGHT_LOAD, WildcardCategory.MOBILITY),
-        HUNGER_CHASE(WildcardIds.HUNGER_CHASE, WildcardCategory.MOBILITY),
-        STILL_GLOW(WildcardIds.STILL_GLOW, WildcardCategory.VISION),
-        SNEAK_FREEZE(WildcardIds.SNEAK_FREEZE, WildcardCategory.VISION),
-        HUNTER_RADAR(WildcardIds.HUNTER_RADAR, WildcardCategory.VISION),
-        WHO_ARE_YOU(WildcardIds.WHO_ARE_YOU, WildcardCategory.VISION),
-        TINY_PLAYERS(WildcardIds.TINY_PLAYERS, WildcardCategory.VISION),
-        WORLD_TILT(WildcardIds.WORLD_TILT, WildcardCategory.VISION),
-        SUPPLY_DROP(WildcardIds.SUPPLY_DROP, WildcardCategory.WORLD),
-        DROP_BOMB(WildcardIds.DROP_BOMB, WildcardCategory.WORLD),
-        CHAIN_MINING(WildcardIds.CHAIN_MINING, WildcardCategory.WORLD),
-        BLOCK_DECAY(WildcardIds.BLOCK_DECAY, WildcardCategory.WORLD),
-        BACKROOMS(WildcardIds.BACKROOMS, WildcardCategory.WORLD);
-
-        private final String id;
-        private final String label;
-        private final String description;
-        private final WildcardCategory category;
-
-        ToggleField(String id, WildcardCategory category) {
-            this.id = id;
-            this.label = HunterWildcardText.wildcardNameKey(id);
-            this.description = HunterWildcardText.wildcardDescriptionKey(id);
-            this.category = category;
-        }
-
-        static ToggleField[] inCategory(WildcardCategory category) {
-            List<ToggleField> fields = new ArrayList<>();
-            for (ToggleField field : values()) {
-                if (field.category == category) {
-                    fields.add(field);
-                }
-            }
-            return fields.toArray(new ToggleField[0]);
-        }
-    }
-
     private enum ButtonVariant {
+        TEAM_HUNTER, TEAM_RUNNER,
+        NAV, NAV_SELECTED,
+        SWITCH_ON, SWITCH_OFF,
+        LINK,
         PRIMARY,
         NORMAL,
         SELECTED,
@@ -3738,6 +3251,8 @@ public class HunterWildcardConfigScreen extends Screen {
     private class StyledButtonWidget extends ButtonWidget {
         private final String description;
         private final ButtonVariant variant;
+        private float navigationReveal=1;
+
 
         StyledButtonWidget(int x, int y, int width, int height, String title, String description, ButtonWidget.PressAction action, ButtonVariant variant) {
             super(x, y, width, height, text(title), action, DEFAULT_NARRATION_SUPPLIER);
@@ -3746,9 +3261,52 @@ public class HunterWildcardConfigScreen extends Screen {
         }
 
         @Override
+        public void playDownSound(net.minecraft.client.sound.SoundManager manager) {
+            if(variant==ButtonVariant.NAV || variant==ButtonVariant.NAV_SELECTED)manager.play(net.minecraft.client.sound.PositionedSoundInstance.ui(net.minecraft.sound.SoundEvents.UI_BUTTON_CLICK.value(),1.1F,0.3F));
+            else super.playDownSound(manager);
+        }
+
+        @Override
         protected void drawIcon(DrawContext context, int mouseX, int mouseY, float delta) {
+            if(variant==ButtonVariant.NAV || variant==ButtonVariant.NAV_SELECTED) {
+                boolean clipped=navigationReveal<1;
+                if(clipped)context.enableScissor(getX(),getY(),getX()+getWidth(),getY()+Math.max(1,Math.round(24*navigationReveal)));
+                boolean selected=variant==ButtonVariant.NAV_SELECTED;
+                NavigationAnimation animation=navigationAnimations.computeIfAbsent(getMessage().getString(),ignored->new NavigationAnimation());
+                long now=System.nanoTime();float elapsed=animation.frameAt==0?0:(now-animation.frameAt)/1_000_000_000F;animation.frameAt=now;
+                float target=isMouseOver(mouseX,mouseY)||isFocused()?1F:0F;
+                animation.hover=com.xiaoming.hunterwildcard.client.ui.DisplayPreferences.get.reducedMotion?target:animation.hover+(target-animation.hover)*(1F-(float)Math.exp(-Math.min(elapsed,0.1F)*16F));
+                int alpha=Math.round((selected?136:68*animation.hover)*navigationReveal);
+                if(alpha>0)context.fill(getX(),getY(),getX()+getWidth(),getY()+getHeight(),(alpha<<24)|(selected?0x345B78:0x374351));
+                if(selected)context.fill(getX(),getY()+4,getX()+2,getY()+getHeight()-4,withAlpha(0xFF78B8FA,navigationReveal));
+                int slide=Math.round(animation.hover*3);
+                context.drawText(textRenderer,net.minecraft.text.Text.literal(trim(getMessage().getString(),getWidth()-19)),getX()+8+slide,getY()+(getHeight()-textRenderer.fontHeight)/2,withAlpha(selected?0xFFB9DDFF:0xFFCAD3DC,navigationReveal),false);
+                if(clipped)context.disableScissor();
+                if(isHovered()&&!description.isBlank())setHoverTooltip(description,mouseX,mouseY);
+                return;
+            }
+            if(variant==ButtonVariant.SWITCH_ON || variant==ButtonVariant.SWITCH_OFF) {
+                boolean on=variant==ButtonVariant.SWITCH_ON,focus=isHovered()||isFocused();
+                int x=getX(),y=getY(),color=active?(on?0xFF77D69A:0xFF8996A3):0xFF58616B;
+                if(focus)context.fill(x,y,x+getWidth(),y+getHeight(),0x55374351);
+                context.fill(x+2,y+6,x+24,y+16,on&&active?0xFF335A49:0xFF374351);
+                int knob=on?x+15:x+4;
+                context.fill(knob,y+8,knob+7,y+14,color);
+                context.drawText(textRenderer,getMessage(),x+28,y+7,active?0xFFE8EDF2:0xFF8996A3,false);
+                if(focus)context.fill(x,y+getHeight()-1,x+getWidth(),y+getHeight(),0xFF78B8FA);
+                if(isHovered()&&!description.isBlank())setHoverTooltip(description,mouseX,mouseY);
+                return;
+            }
+            if(variant==ButtonVariant.LINK) {
+                String title=trim(getMessage().getString(),getWidth());
+                int ty=getY()+(getHeight()-textRenderer.fontHeight)/2;
+                int color=!active?0xFF58616B:isHovered()||isFocused()?0xFF78B8FA:0xFFA6B1BD;
+                context.drawText(textRenderer,net.minecraft.text.Text.literal(title),getX(),ty,color,false);
+                if(active&&(isHovered()||isFocused()))context.fill(getX(),ty+textRenderer.fontHeight+1,getX()+textRenderer.getWidth(title),ty+textRenderer.fontHeight+2,color);
+                return;
+            }
             ButtonVariant renderedVariant = active || variant == ButtonVariant.SELECTED ? variant : ButtonVariant.DISABLED;
-            Palette palette = palette(renderedVariant, isHovered());
+            Palette palette = palette(renderedVariant, isHovered() || isFocused());
             if (isHovered() && !description.isBlank()) {
                 setHoverTooltip(description, mouseX, mouseY);
             }
@@ -3789,9 +3347,11 @@ public class HunterWildcardConfigScreen extends Screen {
 
         private Palette palette(ButtonVariant variant, boolean hovered) {
             return switch (variant) {
+                case TEAM_HUNTER -> new Palette(hovered ? 0xCC713844 : 0xAA502C35, 0xFFEF7181, 0xFFFF9CAB, 0xFFFFDCE1, 0xFFFFDCE1);
+                case TEAM_RUNNER -> new Palette(hovered ? 0xCC315D87 : 0xAA253F5D, 0xFF78B8FA, 0xFFA3D0FF, 0xFFDEEEFF, 0xFFDEEEFF);
                 case PRIMARY -> new Palette(hovered ? 0xCC246C86 : 0xAA1F536A, hovered ? 0xFF7FE7FF : 0xFF54B8D6, 0xFF7FE7FF, 0xFFFFFFFF, 0xFFD7F8FF);
-                case SELECTED -> new Palette(0xAA345B78, 0xFF7FC2FF, 0xFF7FC2FF, 0xFFFFFFFF, 0xFFD7ECFF);
-                case DANGER -> new Palette(hovered ? 0xAA6D3434 : 0x8845292F, hovered ? 0xFFFF8A8A : 0xFFD76474, 0xFFFF8A8A, 0xFFFFFFFF, 0xFFFFC2C8);
+                case SELECTED -> new Palette(0xAA345B78, 0xFF78B8FA, 0xFF78B8FA, 0xFFFFFFFF, 0xFFD7ECFF);
+                case DANGER -> new Palette(hovered ? 0xAA6D3434 : 0x8845292F, hovered ? 0xFFFF8A8A : 0xFFEF7181, 0xFFFF8A8A, 0xFFFFFFFF, 0xFFFFC2C8);
                 case TOGGLE_ON -> new Palette(hovered ? 0xAA2E5C49 : 0x88324B3F, hovered ? 0xFF77E287 : 0xFF55B978, 0xFF77E287, 0xFFFFFFFF, 0xFFD7F8E1);
                 case TOGGLE_OFF -> new Palette(hovered ? 0xAA3A4652 : 0x88303A46, hovered ? 0xFF8A98A6 : 0xFF59636C, 0xFF8A98A6, 0xFFE1E6EB, 0xFF9FAAB4);
                 case DISABLED -> new Palette(0x66303A46, 0xFF59636C, 0xFF59636C, 0xFF9FAAB4, 0xFF9FAAB4);

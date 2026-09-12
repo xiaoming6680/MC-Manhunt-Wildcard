@@ -24,6 +24,7 @@ public class DropdownWidget extends ButtonWidget {
     private String value;
     private boolean expanded;
     private boolean openUp;
+    private int keyboardIndex;
 
     public DropdownWidget(
             TextRenderer textRenderer,
@@ -88,7 +89,7 @@ public class DropdownWidget extends ButtonWidget {
         for (int i = 0; i < options.size(); i++) {
             Option option = options.get(i);
             int optionY = menuY + i * optionHeight;
-            boolean hovered = isInside(menuX, optionY, menuWidth, optionHeight, mouseX, mouseY);
+            boolean hovered = isInside(menuX, optionY, menuWidth, optionHeight, mouseX, mouseY) || (isFocused() && i == keyboardIndex);
             boolean selected = option.value().equals(selectedOption().value());
             if (hovered || selected) {
                 context.fill(menuX + 2, optionY + 1, menuX + menuWidth - 2, optionY + optionHeight - 1, hovered ? 0xAA3E5570 : 0x66345B78);
@@ -143,9 +144,28 @@ public class DropdownWidget extends ButtonWidget {
     }
 
     @Override
+    public boolean keyPressed(net.minecraft.client.input.KeyInput input) {
+        if (!active || !visible) return false;
+        int key = input.key();
+        if (key == 256 && expanded) { close(); return true; }
+        if (key == 257 || key == 32 || key == 335) {
+            if (!expanded) { closeOthers.run(); expanded = true; keyboardIndex = Math.max(0, options.indexOf(selectedOption())); updateMessage(); }
+            else if (!options.isEmpty()) { value = options.get(keyboardIndex).value(); close(); valueConsumer.accept(value); }
+            return true;
+        }
+        if (key == 264 || key == 265 || key == 268 || key == 269) {
+            if (options.isEmpty()) return true;
+            if (!expanded) { closeOthers.run(); expanded = true; keyboardIndex = Math.max(0, options.indexOf(selectedOption())); }
+            keyboardIndex = key == 268 ? 0 : key == 269 ? options.size() - 1 : Math.floorMod(keyboardIndex + (key == 264 ? 1 : -1), options.size());
+            updateMessage(); return true;
+        }
+        return super.keyPressed(input);
+    }
+
+    @Override
     protected void drawIcon(DrawContext context, int mouseX, int mouseY, float delta) {
         boolean enabled = active;
-        boolean hovered = isHovered();
+        boolean hovered = isHovered() || isFocused();
         Palette palette = enabled
                 ? new Palette(hovered || expanded ? 0xAA3E5570 : 0x88303A46, hovered || expanded ? 0xFF74B6FF : 0xFF4C5A66, 0xFFFFFFFF)
                 : new Palette(0x66303A46, 0xFF59636C, 0xFF9FAAB4);

@@ -11,6 +11,7 @@ import com.xiaoming.hunterwildcard.util.HunterWildcardText;
 import com.xiaoming.hunterwildcard.util.PlayerUtil;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.network.RegistryByteBuf;
 import net.minecraft.network.codec.PacketCodec;
 import net.minecraft.network.packet.CustomPayload;
@@ -23,58 +24,85 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 public class HunterWildcardPackets {
+    // Bump this whenever a payload layout changes incompatibly, even within a mod release.
+    public static final int PROTOCOL_VERSION = 3;
+
+    private static Identifier protocolId(String name) {
+        return Identifier.of(HunterWildcardMod.MOD_ID, "v" + PROTOCOL_VERSION + "/" + name);
+    }
+
+    public static boolean hasIncompatibleProtocol(Set<Identifier> channels, Identifier requiredChannel) {
+        return !channels.contains(requiredChannel)
+                && channels.stream().anyMatch(id -> id.getNamespace().equals(HunterWildcardMod.MOD_ID));
+    }
+
+    public static Text incompatibleProtocolMessage() {
+        // The fallback also reaches older clients that do not have this translation key.
+        return Text.translatableWithFallback("hunterwildcard.network.incompatible",
+                "外卡追逃网络协议不兼容。请将客户端和服务端更新为同一份新版模组。\n"
+                        + "Manhunt Wildcard protocol mismatch. Install the same new mod JAR on both client and server.");
+    }
+
     public static final CustomPayload.Id<RequestConfigPayload> C2S_REQUEST_CONFIG =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "request_config"));
+            new CustomPayload.Id<>(protocolId("request_config"));
     public static final CustomPayload.Id<SyncConfigPayload> S2C_SYNC_CONFIG =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "sync_config"));
+            new CustomPayload.Id<>(protocolId("sync_config"));
     public static final CustomPayload.Id<OperationResultPayload> S2C_OPERATION_RESULT =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "operation_result"));
+            new CustomPayload.Id<>(protocolId("operation_result"));
     public static final CustomPayload.Id<CloseConfigScreenPayload> S2C_CLOSE_CONFIG_SCREEN =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "close_config_screen"));
+            new CustomPayload.Id<>(protocolId("close_config_screen"));
     public static final CustomPayload.Id<ClearChatPayload> S2C_CLEAR_CHAT =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "clear_chat"));
+            new CustomPayload.Id<>(protocolId("clear_chat"));
     public static final CustomPayload.Id<WildcardDrawPayload> S2C_WILDCARD_DRAW =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "wildcard_draw"));
+            new CustomPayload.Id<>(protocolId("wildcard_draw"));
     public static final CustomPayload.Id<WildcardIntroPayload> S2C_WILDCARD_INTRO =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "wildcard_intro"));
+            new CustomPayload.Id<>(protocolId("wildcard_intro"));
     public static final CustomPayload.Id<HunterKillFeedbackPayload> S2C_HUNTER_KILL_FEEDBACK =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "hunter_kill_feedback"));
+            new CustomPayload.Id<>(protocolId("hunter_kill_feedback"));
     public static final CustomPayload.Id<HudFeedbackPayload> S2C_HUD_FEEDBACK =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "hud_feedback"));
+            new CustomPayload.Id<>(protocolId("hud_feedback"));
     public static final CustomPayload.Id<ObjectiveStatusPayload> S2C_OBJECTIVE_STATUS =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "objective_status"));
+            new CustomPayload.Id<>(protocolId("objective_status"));
     public static final CustomPayload.Id<ObjectiveNoticePayload> S2C_OBJECTIVE_NOTICE =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "objective_notice"));
+            new CustomPayload.Id<>(protocolId("objective_notice"));
     public static final CustomPayload.Id<WeaponOverheatStatusPayload> S2C_WEAPON_OVERHEAT_STATUS =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "weapon_overheat_status"));
+            new CustomPayload.Id<>(protocolId("weapon_overheat_status"));
     public static final CustomPayload.Id<WorldTiltPayload> S2C_WORLD_TILT =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "world_tilt"));
+            new CustomPayload.Id<>(protocolId("world_tilt"));
     public static final CustomPayload.Id<KeyScramblePayload> S2C_KEY_SCRAMBLE =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "key_scramble"));
+            new CustomPayload.Id<>(protocolId("key_scramble"));
     public static final CustomPayload.Id<BackroomsPhasePayload> S2C_BACKROOMS_PHASE =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "backrooms_phase"));
+            new CustomPayload.Id<>(protocolId("backrooms_phase"));
     public static final CustomPayload.Id<UpdateConfigPayload> C2S_UPDATE_CONFIG =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "update_config"));
+            new CustomPayload.Id<>(protocolId("update_config"));
     public static final CustomPayload.Id<ReloadConfigPayload> C2S_RELOAD_CONFIG =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "reload_config"));
+            new CustomPayload.Id<>(protocolId("reload_config"));
     public static final CustomPayload.Id<DebugActionPayload> C2S_DEBUG_ACTION =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "debug_action"));
+            new CustomPayload.Id<>(protocolId("debug_action"));
     public static final CustomPayload.Id<TestWildcardPayload> C2S_TEST_WILDCARD =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "test_wildcard"));
+            new CustomPayload.Id<>(protocolId("test_wildcard"));
     public static final CustomPayload.Id<TeamActionPayload> C2S_TEAM_ACTION =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "team_action"));
+            new CustomPayload.Id<>(protocolId("team_action"));
     public static final CustomPayload.Id<GameActionPayload> C2S_GAME_ACTION =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "game_action"));
+            new CustomPayload.Id<>(protocolId("game_action"));
 
     public static final CustomPayload.Id<DeathWaitPayload> S2C_DEATH_WAIT =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "death_wait"));
+            new CustomPayload.Id<>(protocolId("death_wait"));
+    public static final CustomPayload.Id<DeathSpectatePayload> S2C_DEATH_SPECTATE =
+            new CustomPayload.Id<>(protocolId("death_spectate"));
+    public static final CustomPayload.Id<CycleDeathSpectatePayload> C2S_CYCLE_DEATH_SPECTATE =
+            new CustomPayload.Id<>(protocolId("cycle_death_spectate"));
     public static final CustomPayload.Id<CompassMenuPayload> S2C_COMPASS_MENU =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "compass_menu"));
+            new CustomPayload.Id<>(protocolId("compass_menu"));
     public static final CustomPayload.Id<CompassSelectPayload> C2S_COMPASS_SELECT =
-            new CustomPayload.Id<>(Identifier.of(HunterWildcardMod.MOD_ID, "compass_select"));
+            new CustomPayload.Id<>(protocolId("compass_select"));
+
+    public static final CustomPayload.Id<RoundDetailsPayload> S2C_ROUND_DETAILS =
+            new CustomPayload.Id<>(protocolId("round_details"));
 
     private static boolean payloadTypesRegistered;
     private static boolean serverReceiversRegistered;
@@ -91,6 +119,7 @@ public class HunterWildcardPackets {
             return;
         }
         payloadTypesRegistered = true;
+        PayloadTypeRegistry.playS2C().register(S2C_ROUND_DETAILS, RoundDetailsPayload.CODEC);
 
         PayloadTypeRegistry.playC2S().register(C2S_REQUEST_CONFIG, RequestConfigPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(S2C_SYNC_CONFIG, SyncConfigPayload.CODEC);
@@ -114,6 +143,8 @@ public class HunterWildcardPackets {
         PayloadTypeRegistry.playC2S().register(C2S_TEAM_ACTION, TeamActionPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(C2S_GAME_ACTION, GameActionPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(S2C_DEATH_WAIT, DeathWaitPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(S2C_DEATH_SPECTATE, DeathSpectatePayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(C2S_CYCLE_DEATH_SPECTATE, CycleDeathSpectatePayload.CODEC);
         PayloadTypeRegistry.playS2C().register(S2C_COMPASS_MENU, CompassMenuPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(C2S_COMPASS_SELECT, CompassSelectPayload.CODEC);
     }
@@ -123,9 +154,17 @@ public class HunterWildcardPackets {
             return;
         }
         serverReceiversRegistered = true;
+        ServerPlayNetworking.registerGlobalReceiver(C2S_CYCLE_DEATH_SPECTATE, (payload, context) ->
+                GameManager.getInstance().cycleDeathSpectate(context.player(), payload.previous()));
+
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+            if (hasIncompatibleProtocol(ServerPlayNetworking.getSendable(handler), S2C_SYNC_CONFIG.id())) {
+                handler.disconnect(incompatibleProtocolMessage());
+            }
+        });
 
         ServerPlayNetworking.registerGlobalReceiver(C2S_REQUEST_CONFIG, (payload, context) -> sendSync(context.player()));
-        ServerPlayNetworking.registerGlobalReceiver(C2S_UPDATE_CONFIG, (payload, context) -> handleUpdateConfig(context.player(), payload.config()));
+        ServerPlayNetworking.registerGlobalReceiver(C2S_UPDATE_CONFIG, (payload, context) -> handleUpdateConfig(context.player(), payload));
         ServerPlayNetworking.registerGlobalReceiver(C2S_RELOAD_CONFIG, (payload, context) -> handleReloadConfig(context.player()));
         ServerPlayNetworking.registerGlobalReceiver(C2S_DEBUG_ACTION, (payload, context) -> handleDebugAction(context.player(), payload.action()));
         ServerPlayNetworking.registerGlobalReceiver(C2S_TEST_WILDCARD, (payload, context) -> handleTestWildcard(context.player(), payload.wildcardName()));
@@ -138,6 +177,7 @@ public class HunterWildcardPackets {
     public static void sendSync(ServerPlayerEntity player) {
         if (ServerPlayNetworking.canSend(player, S2C_SYNC_CONFIG)) {
             ServerPlayNetworking.send(player, createSyncPayload(player));
+            if (ServerPlayNetworking.canSend(player, S2C_ROUND_DETAILS)) ServerPlayNetworking.send(player, GameManager.getInstance().roundDetails(player, objectiveRunnerText, objectiveHunterText));
         }
     }
 
@@ -293,6 +333,12 @@ public class HunterWildcardPackets {
     }
 
     /** Full-screen death wait cover: remaining seconds plus two info lines; visible=false clears it. */
+    public static void sendDeathSpectate(ServerPlayerEntity player, boolean active, String targetName, int targetCount) {
+        if (ServerPlayNetworking.canSend(player, S2C_DEATH_SPECTATE)) {
+            ServerPlayNetworking.send(player, new DeathSpectatePayload(active, targetName, targetCount));
+        }
+    }
+
     public static void sendDeathWait(ServerPlayerEntity player, boolean visible, int remainingSeconds, String line1, String line2) {
         if (ServerPlayNetworking.canSend(player, S2C_DEATH_WAIT)) {
             ServerPlayNetworking.send(player, new DeathWaitPayload(visible, remainingSeconds, line1, line2));
@@ -379,34 +425,29 @@ public class HunterWildcardPackets {
         );
     }
 
-    private static void handleUpdateConfig(ServerPlayerEntity player, ConfigSnapshot snapshot) {
-        if (!HunterWildcardCommand.canManageGame(player.getCommandSource())) {
-            reject(player);
-            return;
-        }
-
+    private static void handleUpdateConfig(ServerPlayerEntity player, UpdateConfigPayload request) {
         GameManager manager = GameManager.getInstance();
-        if (manager.getState() != GameState.WAITING) {
-            // Mid-round only the live-safe subset is applied; everyone is told the rules changed.
-            manager.applyLiveConfig(snapshot.toConfig());
-            manager.saveConfig();
-            String message = HunterWildcardText.spec("msg.config.rules_updated");
-            manager.getMessageManager().broadcast(player.getEntityWorld().getServer(),
-                    HunterWildcardText.translatable("msg.config.rules_updated_by", PlayerUtil.displayNameText(player)));
-            syncAllAndResult(player, true, message);
+        if (!HunterWildcardCommand.canManageGame(player.getCommandSource())) {
+            saveResult(player, request.requestId(), false, "msg.permission.denied");
             return;
         }
-
-        manager.applyConfig(snapshot.toConfig());
-        if (manager.saveConfig()) {
-            String message = HunterWildcardText.spec("msg.config.saved");
-            manager.getMessageManager().directSpec(player, message);
-            syncAllAndResult(player, true, message);
-        } else {
-            String message = HunterWildcardText.spec("msg.config.save_failed");
-            player.sendMessage(HunterWildcardText.fromSpec(message), false);
-            syncAllAndResult(player, false, message);
+        if (!ConfigSnapshot.from(manager.getConfig()).equals(request.base())) {
+            saveResult(player, request.requestId(), false, "ui.save.conflict");
+            return;
         }
+        boolean live = manager.getState() != GameState.WAITING;
+        if (live) manager.applyLiveConfig(request.config().toConfig());
+        else manager.applyConfig(request.config().toConfig());
+        boolean saved = manager.saveConfig();
+        if (live) manager.getMessageManager().broadcast(player.getEntityWorld().getServer(),
+                HunterWildcardText.translatable("msg.config.rules_updated_by", PlayerUtil.displayNameText(player)));
+        syncAll(player.getEntityWorld().getServer());
+        saveResult(player, request.requestId(), saved, saved ? "msg.config.saved" : "ui.save.disk_failed");
+    }
+
+    private static void saveResult(ServerPlayerEntity player, long requestId, boolean success, String key) {
+        sendSync(player);
+        ServerPlayNetworking.send(player, new OperationResultPayload(success, HunterWildcardText.key(key), requestId));
     }
 
     private static void handleReloadConfig(ServerPlayerEntity player) {
@@ -686,6 +727,8 @@ public class HunterWildcardPackets {
             String hunterVictoryType,
             boolean hunterWinByRunnerKillsEnabled,
             int hunterRunnerKillTarget,
+            boolean blazeRodChanceEnabled,
+            int blazeRodChancePercent,
             Map<String, Boolean> enabledWildcards
     ) {
         private static ConfigSnapshot fromBuf(RegistryByteBuf buf) {
@@ -754,6 +797,8 @@ public class HunterWildcardPackets {
                     buf.readInt(),
                     buf.readString(),
                     buf.readString(),
+                    buf.readBoolean(),
+                    buf.readInt(),
                     buf.readBoolean(),
                     buf.readInt(),
                     readWildcardToggles(buf)
@@ -827,6 +872,8 @@ public class HunterWildcardPackets {
             buf.writeString(hunterVictoryType);
             buf.writeBoolean(hunterWinByRunnerKillsEnabled);
             buf.writeInt(hunterRunnerKillTarget);
+            buf.writeBoolean(blazeRodChanceEnabled);
+            buf.writeInt(blazeRodChancePercent);
             writeWildcardToggles(buf, enabledWildcards);
         }
 
@@ -898,6 +945,8 @@ public class HunterWildcardPackets {
                     config.hunterVictoryType,
                     config.hunterWinByRunnerKillsEnabled,
                     config.hunterRunnerKillTarget,
+                    config.blazeRodChanceEnabled,
+                    config.blazeRodChancePercent,
                     new LinkedHashMap<>(config.enabledWildcards)
             );
         }
@@ -970,6 +1019,8 @@ public class HunterWildcardPackets {
             config.hunterVictoryType = hunterVictoryType;
             config.hunterWinByRunnerKillsEnabled = hunterWinByRunnerKillsEnabled;
             config.hunterRunnerKillTarget = hunterRunnerKillTarget;
+            config.blazeRodChanceEnabled = blazeRodChanceEnabled;
+            config.blazeRodChancePercent = blazeRodChancePercent;
             config.enabledWildcards = new LinkedHashMap<>(enabledWildcards);
             config.validate();
             return config;
@@ -1069,17 +1120,19 @@ public class HunterWildcardPackets {
         }
     }
 
-    public record OperationResultPayload(boolean success, String message) implements CustomPayload {
+    public record OperationResultPayload(boolean success, String message, long requestId) implements CustomPayload {
+        public OperationResultPayload(boolean success, String message) { this(success, message, 0L); }
         public static final PacketCodec<RegistryByteBuf, OperationResultPayload> CODEC =
                 PacketCodec.of(OperationResultPayload::write, OperationResultPayload::read);
 
         private void write(RegistryByteBuf buf) {
             buf.writeBoolean(success);
             buf.writeString(message);
+            buf.writeLong(requestId);
         }
 
         private static OperationResultPayload read(RegistryByteBuf buf) {
-            return new OperationResultPayload(buf.readBoolean(), buf.readString(256));
+            return new OperationResultPayload(buf.readBoolean(), buf.readString(2048), buf.readLong());
         }
 
         @Override
@@ -1324,16 +1377,18 @@ public class HunterWildcardPackets {
         }
     }
 
-    public record UpdateConfigPayload(ConfigSnapshot config) implements CustomPayload {
+    public record UpdateConfigPayload(ConfigSnapshot config, ConfigSnapshot base, long requestId) implements CustomPayload {
         public static final PacketCodec<RegistryByteBuf, UpdateConfigPayload> CODEC =
                 PacketCodec.of(UpdateConfigPayload::write, UpdateConfigPayload::read);
 
         private void write(RegistryByteBuf buf) {
             config.write(buf);
+            base.write(buf);
+            buf.writeLong(requestId);
         }
 
         private static UpdateConfigPayload read(RegistryByteBuf buf) {
-            return new UpdateConfigPayload(ConfigSnapshot.fromBuf(buf));
+            return new UpdateConfigPayload(ConfigSnapshot.fromBuf(buf), ConfigSnapshot.fromBuf(buf), buf.readLong());
         }
 
         @Override
@@ -1432,6 +1487,19 @@ public class HunterWildcardPackets {
         public Id<? extends CustomPayload> getId() {
             return C2S_TEAM_ACTION;
         }
+    }
+
+    public record DeathSpectatePayload(boolean active, String targetName, int targetCount) implements CustomPayload {
+        public static final PacketCodec<RegistryByteBuf, DeathSpectatePayload> CODEC = PacketCodec.of(
+                (value, buf) -> { buf.writeBoolean(value.active); buf.writeString(value.targetName, 256); buf.writeVarInt(value.targetCount); },
+                buf -> new DeathSpectatePayload(buf.readBoolean(), buf.readString(256), buf.readVarInt()));
+        @Override public Id<? extends CustomPayload> getId() { return S2C_DEATH_SPECTATE; }
+    }
+
+    public record CycleDeathSpectatePayload(boolean previous) implements CustomPayload {
+        public static final PacketCodec<RegistryByteBuf, CycleDeathSpectatePayload> CODEC = PacketCodec.of(
+                (value, buf) -> buf.writeBoolean(value.previous), buf -> new CycleDeathSpectatePayload(buf.readBoolean()));
+        @Override public Id<? extends CustomPayload> getId() { return C2S_CYCLE_DEATH_SPECTATE; }
     }
 
     public record DeathWaitPayload(boolean visible, int remainingSeconds, String line1, String line2) implements CustomPayload {
@@ -1542,4 +1610,28 @@ public class HunterWildcardPackets {
             return C2S_GAME_ACTION;
         }
     }
+    public record MemberEntry(String name, String role, String state, int lives, int respawnSeconds) {}
+    public record RoundDetailsPayload(List<MemberEntry> members, String winner, String reason, List<MemberEntry> resultMembers,
+            String objective, String hunterObjective, String ownState, int ownLives) implements CustomPayload {
+        public static final PacketCodec<RegistryByteBuf, RoundDetailsPayload> CODEC = PacketCodec.of(RoundDetailsPayload::write, RoundDetailsPayload::read);
+        private static void members(RegistryByteBuf b, List<MemberEntry> entries) {
+            b.writeVarInt(entries.size());
+            for (MemberEntry e : entries) { b.writeString(e.name()); b.writeString(e.role()); b.writeString(e.state()); b.writeInt(e.lives()); b.writeInt(e.respawnSeconds()); }
+        }
+        private static List<MemberEntry> members(RegistryByteBuf b) {
+            int n = b.readVarInt(); if (n < 0 || n > 1024) throw new IllegalArgumentException("Invalid roster size");
+            List<MemberEntry> result = new ArrayList<>();
+            for (int i=0; i<n; i++) result.add(new MemberEntry(b.readString(256), b.readString(64), b.readString(64), b.readInt(), b.readInt()));
+            return List.copyOf(result);
+        }
+        private void write(RegistryByteBuf b) {
+            members(b, members); b.writeString(winner); b.writeString(reason); members(b, resultMembers);
+            b.writeString(objective); b.writeString(hunterObjective); b.writeString(ownState); b.writeInt(ownLives);
+        }
+        private static RoundDetailsPayload read(RegistryByteBuf b) {
+            return new RoundDetailsPayload(members(b), b.readString(64), b.readString(4096), members(b), b.readString(4096), b.readString(4096), b.readString(64), b.readInt());
+        }
+        @Override public Id<? extends CustomPayload> getId() { return S2C_ROUND_DETAILS; }
+    }
+
 }

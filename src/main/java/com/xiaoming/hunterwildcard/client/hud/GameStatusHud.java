@@ -1,6 +1,7 @@
 package com.xiaoming.hunterwildcard.client.hud;
 
 import com.xiaoming.hunterwildcard.client.ClientGameStatus;
+import com.xiaoming.hunterwildcard.client.ui.DisplayPreferences;
 import com.xiaoming.hunterwildcard.client.HunterWildcardClientText;
 import com.xiaoming.hunterwildcard.client.key.HunterWildcardKeyBindings;
 import com.xiaoming.hunterwildcard.game.GameState;
@@ -66,7 +67,7 @@ public final class GameStatusHud {
         String hint = tr(HunterWildcardText.spec(lobby ? "hud.status.hint_open" : "hud.status.hint_close", keyName));
         int accent = lobby ? COLOR_ACCENT_LOBBY : COLOR_ACCENT_GAME;
 
-        int screenWidth = client.getWindow().getScaledWidth();
+        int screenWidth = HudLayout.width();
         int labelWidth = 0;
         int valueWidth = 0;
         for (Row row : rows) {
@@ -78,10 +79,10 @@ public final class GameStatusHud {
         int neededWidth = 6 + labelWidth + 4 + Math.max(valueWidth, textRenderer.getWidth(hint)) + 6;
         int panelWidth = Math.max(PANEL_WIDTH, Math.min(maxPanelWidth, neededWidth));
         int panelHeight = 16 + rows.size() * ROW_HEIGHT + 12;
-        int panelX = MARGIN;
-        int panelY = Math.max(MARGIN, topY);
+        int panelX = DisplayPreferences.get.inset;
+        int panelY = Math.max(DisplayPreferences.get.inset, topY);
 
-        context.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, 0xD8161B22);
+        context.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, ((DisplayPreferences.get.opacity * 255 / 100) << 24) | 0x1C232C);
         context.fill(panelX, panelY, panelX + 2, panelY + panelHeight, accent);
         context.fill(panelX, panelY, panelX + panelWidth, panelY + 1, accent);
         context.drawText(textRenderer, Text.literal(trim(textRenderer, title, panelWidth - 10)), panelX + 6, panelY + 4, accent, false);
@@ -109,6 +110,7 @@ public final class GameStatusHud {
         rows.add(new Row(label("hud.status.state"), tr(HunterWildcardText.key("state.waiting")), COLOR_ACCENT_LOBBY));
         rows.add(new Row(label("hud.status.teams"), tr(HunterWildcardText.spec("hud.status.teams_value", sync.hunterCount(), sync.runnerCount())), COLOR_VALUE));
         rows.add(new Row(label("hud.status.my_team"), tr(sync.playerRole()), sync.playerInTeam() ? COLOR_VALUE : COLOR_ACCENT_GAME));
+        if (DisplayPreferences.get.compact) return rows;
         rows.add(new Row(label("hud.status.runner_win"), runnerWinText(config), COLOR_VALUE));
         rows.add(new Row(label("hud.status.hunter_win"), hunterWinText(config), COLOR_VALUE));
         rows.add(new Row(label("hud.status.runner_respawn"), respawnText(config.runnerRespawnMode(), config.runnerLives(), RespawnMode.LIMITED_LIVES), COLOR_VALUE));

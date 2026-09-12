@@ -37,6 +37,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class WildcardHudClientGameTest implements FabricClientGameTest {
     @Override
     public void runTest(ClientGameTestContext c) {
+        if ("1".equals(System.getenv("HW_NETWORK_TEST_ONLY")) || "1".equals(System.getenv("HW_INVENTORY_TEST_ONLY")) || "1".equals(System.getenv("HW_SPECTATE_TEST_ONLY"))) return;
         c.getInput().resizeWindow(1920, 1080);
         try (TestSingleplayerContext world = c.worldBuilder()
                 .adjustSettings(creator -> {
@@ -50,6 +51,11 @@ public final class WildcardHudClientGameTest implements FabricClientGameTest {
             world.getServer().runCommand("difficulty peaceful");
             c.waitTicks(10);
 
+            if ("1".equals(System.getenv("HW_WATER_INPUT_TEST_ONLY"))) {
+                WaterInputAssertions.run(c, world);
+                return;
+            }
+
             // ---- lobby HUD: appears once someone joins a team ----
             world.getServer().runOnServer(server -> {
                 GameManager.getInstance().join(player(server), PlayerRole.HUNTER);
@@ -59,6 +65,11 @@ public final class WildcardHudClientGameTest implements FabricClientGameTest {
             c.runOnClient(client -> check(ClientGameStatus.hasSync() && ClientGameStatus.latest().hunterCount() == 1, "Lobby sync arrived with one hunter"));
             clearChat(c);
             c.takeScreenshot("lobby-hud");
+
+            WorldTiltAssertions.run(c, world);
+            UiRedesignAssertions.run(c, world);
+            // Fast visual iteration still executes all editor assertions; the default run includes gameplay.
+            if ("1".equals(System.getenv("HW_UI_TEST_ONLY"))) return;
 
             // ---- config screen pages ----
             c.getInput().pressKey(GLFW.GLFW_KEY_M);
