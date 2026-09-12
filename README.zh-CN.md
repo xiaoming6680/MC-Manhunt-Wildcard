@@ -4,7 +4,7 @@
 
 **追击、逃亡，以及随时改变战局的随机外卡。**
 
-Minecraft `1.21.11–26.2` · Fabric · 28 张外卡 · 中英双语
+Minecraft `1.21.1–26.2` · Fabric · 28 张外卡 · 中英双语
 
 ![Manhunt Wildcard](Manhunt-Wildcard.jpg)
 
@@ -16,17 +16,29 @@ Minecraft `1.21.11–26.2` · Fabric · 28 张外卡 · 中英双语
 
 | Minecraft | Java | 发布文件 |
 | --- | --- | --- |
-| 1.21.11 | 21+ | `MC-Manhunt-Wildcard-1.4.5-mc1.21.11.jar` |
-| 26.1 | 25+ | `MC-Manhunt-Wildcard-1.4.5-mc26.1.jar` |
-| 26.1.1 | 25+ | `MC-Manhunt-Wildcard-1.4.5-mc26.1.1.jar` |
-| 26.1.2 | 25+ | `MC-Manhunt-Wildcard-1.4.5-mc26.1.2.jar` |
-| 26.2 | 25+ | `MC-Manhunt-Wildcard-1.4.5-mc26.2.jar` |
+| 1.21.1 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.1.jar` |
+| 1.21.2 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.2.jar` |
+| 1.21.3 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.3.jar` |
+| 1.21.4 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.4.jar` |
+| 1.21.5 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.5.jar` |
+| 1.21.6 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.6.jar` |
+| 1.21.7 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.7.jar` |
+| 1.21.8 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.8.jar` |
+| 1.21.9 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.9.jar` |
+| 1.21.10 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.10.jar` |
+| 1.21.11 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.11.jar` |
+| 26.1 | 25+ | `MC-Manhunt-Wildcard-1.4.6-mc26.1.jar` |
+| 26.1.1 | 25+ | `MC-Manhunt-Wildcard-1.4.6-mc26.1.1.jar` |
+| 26.1.2 | 25+ | `MC-Manhunt-Wildcard-1.4.6-mc26.1.2.jar` |
+| 26.2 | 25+ | `MC-Manhunt-Wildcard-1.4.6-mc26.2.jar` |
 
 每个文件仅对应表中列出的正式版本。从 [Modrinth](https://modrinth.com/mod/manhunt-wildcard/versions) 或 [GitHub Releases](https://github.com/xiaoming6680/MC-Manhunt-Wildcard/releases) 下载。源码构建见[构建文档](docs/BUILDING.md)。
 
-当前模组版本为 `1.4.5`。两端都要替换为本次同一份 JAR，并移除旧包；本次新增配置采用 v3 协议，不能与旧协议构建混用。协议不兼容时会明确提示更新。
+十五个下载包保留相同的外卡阵容。1.21.6 之前没有原版定位栏，因此隐藏对应设置；1.21.11 之前补给中的钻石矛改用三叉戟，仅在原版包含铜装备的版本计算铜装备。客户端与服务器仍需使用相同的 Minecraft 版本。
 
-1. 将 对应的 `MC-Manhunt-Wildcard-1.4.5-mc<游戏版本>.jar` 放入对应实例的 `mods/`。
+当前模组版本为 `1.4.6`。两端都要替换为本次同一份 JAR，并移除旧包；本次新增配置采用 v3 协议，不能与旧协议构建混用。协议不兼容时会明确提示更新。
+
+1. 将 对应的 `MC-Manhunt-Wildcard-1.4.6-mc<游戏版本>.jar` 放入对应实例的 `mods/`。
 2. 进入世界按 **M**，加入红色猎人或蓝色逃亡者阵营。
 3. 管理员选择预设或调整规则，点击 **应用**，双方有人后开始游戏。
 

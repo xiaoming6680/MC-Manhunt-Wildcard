@@ -1,0 +1,123 @@
+import groovy.json.JsonSlurper
+
+plugins { id 'fabric-loom' version '1.14.10' }
+def rootProperties = new Properties()
+file('../../gradle.properties').withInputStream { rootProperties.load(it) }
+version = rootProperties.mod_version
+group = rootProperties.maven_group
+base { archivesName = "${rootProperties.archives_base_name}-${minecraft_version}" }
+def target = new JsonSlurper().parse(file('targets.json')).find { it.minecraft == minecraft_version }
+if (!target) throw new GradleException("Unsupported target: ${minecraft_version}")
+repositories { mavenCentral() }
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    mappings "net.fabricmc:yarn:${target.yarn}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${target.api}"
+}
+sourceSets.main.resources.srcDir '../../src/main/resources'
+processResources {
+    filesMatching('hunterwildcard.mixins.json') { filter { line -> line.replace('"client.PlayerListEntrySkinMixin",', '"client.SharedKeyBindingMixin", "client.PlayerListEntrySkinMixin",') } }
+    inputs.file 'build.gradle'
+    inputs.property 'version', project.version
+    inputs.property 'minecraftVersion', minecraft_version
+    filesMatching('hunterwildcard.mixins.json') { filter { line -> line.replace('"TiltTravelMixin",', '"TiltTravelMixin", "LivingEntityJumpAccessor",') } }
+    filesMatching('fabric.mod.json') {
+        expand version: project.version
+        filter { line -> line.replace('"minecraft": "1.21.11"', '"minecraft": "' + minecraft_version + '"') }
+    }
+}
+tasks.withType(JavaCompile).configureEach {
+    options.release = 21
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['-Xmaxerrs', '500']
+}
+java { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaVersion.VERSION_21; withSourcesJar() }
+jar { from('../../LICENSE') { rename { "${it}_${rootProperties.archives_base_name}" } } }
+
+
+def adaptLine = { String line ->
+        line.replace('EntityAttributes.GENERIC_', 'EntityAttributes.')
+            .replace('EntityAttributes.PLAYER_', 'EntityAttributes.')
+            .replace('factory.apply(settings)', 'factory.apply(settings.registryKey(key))')
+            .replace(', net.minecraft.world.gen.GenerationStep.Carver carver', '')
+            .replace('void getDebugHudText(', 'void appendDebugHudText(')
+            .replace('ServerPlayerEvents.JOIN.register(BackroomsSession::recoverOnJoin)', 'net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> recoverOnJoin(handler.player))')
+            .replace('net.minecraft.util.TypedActionResult.pass(player.getStackInHand(hand))', 'net.minecraft.util.ActionResult.PASS')
+            .replace('net.minecraft.util.TypedActionResult.fail(player.getStackInHand(hand))', 'net.minecraft.util.ActionResult.FAIL')
+            .replace('Registries.ITEM.getOrEmpty(', 'Registries.ITEM.getOptionalValue(')
+            .replace('player.damage(player.getDamageSources()', 'player.damage(player.getServerWorld(), player.getDamageSources()')
+            .replace('.getRegistryManager().get(RegistryKeys.', '.getRegistryManager().getOrThrow(RegistryKeys.')
+            .replace('enchantments.entryOf(', 'enchantments.getOrThrow(')
+            .replace('state.relativeHeadYaw', 'state.yawDegrees')
+            .replace('getBaseMovementSpeedMultiplier', 'getBaseWaterMovementSpeedMultiplier')
+            .replace('.entryOf(Enchantments.', '.getOrThrow(Enchantments.')
+            .replace('player(server).kill()', 'player(server).kill(player(server).getServerWorld())')
+            .replace('player.kill()', 'player.kill(player.getServerWorld())')
+            .replace('result.getResult() == ActionResult.FAIL', 'result == ActionResult.FAIL')
+            .replace('blaze.damage(player.getDamageSources()', 'blaze.damage(world, player.getDamageSources()')
+}
+def normalizeTeleports = { File destinationDir ->
+        fileTree(destinationDir).matching { include '**/*.java' }.each { source ->
+            String code = source.getText('UTF-8')
+            int cursor = 0
+            while ((cursor = code.indexOf('.teleport(', cursor)) >= 0) {
+                int start = cursor + '.teleport('.length(), depth = 1, commas = 0, end = start
+                for (; end < code.length() && depth > 0; end++) {
+                    char c = code.charAt(end)
+                    if (c == '(') depth++
+                    else if (c == ')') depth--
+                    else if (c == ',' && depth == 1) commas++
+                }
+                if (commas == 6) { code = code.substring(0, end - 1) + ', false' + code.substring(end - 1); end += 7 }
+                cursor = end
+            }
+            source.setText(code, 'UTF-8')
+        }
+}
+layout.buildDirectory = file("build/${minecraft_version}")
+def generatedMain = tasks.register('prepareVersionSources', Sync) {
+    inputs.file 'build.gradle'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from('src/main/java')
+    from('../1.21.2/src/main/java')
+    from('../1.21/src/main/java')
+    into layout.buildDirectory.dir('generated/sources/main')
+    filter { String line -> adaptLine(line) }
+    doLast { normalizeTeleports(destinationDir) }
+}
+sourceSets.main.java.setSrcDirs([generatedMain])
+sourceSets {
+    gametest {
+        compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output
+        runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.main.output
+    }
+}
+def generatedTests = tasks.register('prepareVersionTests', Sync) {
+    inputs.file 'build.gradle'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from('src/gametest/java')
+    from('../1.21.2/src/gametest/java')
+    from('../1.21/src/gametest/java')
+    into layout.buildDirectory.dir('generated/sources/gametest')
+    filter { String line -> adaptLine(line) }
+    doLast { normalizeTeleports(destinationDir) }
+}
+sourceSets.gametest.java.setSrcDirs([generatedTests])
+sourceSets.gametest.resources.srcDir '../1.21/src/gametest/resources'
+loom {
+    mods {
+        hunterwildcard { sourceSet sourceSets.main }
+        'hunterwildcard-test' { sourceSet sourceSets.gametest }
+    }
+    runs {
+        legacyTest {
+            client()
+            name 'Legacy regression client'
+            source sourceSets.gametest
+            runDir "build/test-run-${minecraft_version}"
+            programArg '--username'
+            programArg 'WildcardTest'
+        }
+    }
+}

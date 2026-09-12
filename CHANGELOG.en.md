@@ -2,6 +2,22 @@
 
 English | [Simplified Chinese](CHANGELOG.zh-CN.md)
 
+## 1.4.6
+
+Manhunt Wildcard now supports every stable Minecraft release from **1.21.1 through 26.2** on **Fabric**: 1.21.1–1.21.11, 26.1, 26.1.1, 26.1.2 and 26.2. Each Minecraft version has its own download.
+
+- Add ten backports for Minecraft **1.21.1–1.21.10**, retaining the 28 wildcards, team objectives, preparation rules, configurable loot, bilingual menu and HUD.
+- Adapt networking, inventory components, advancement resets, respawning, spectator cameras, world generation, rendering and input to each supported API family.
+- Preserve safe Nether portal destinations, Overworld respawns after Nether/End deaths, temporary-pearl cleanup and configurable blaze rod drops.
+- Preserve teammate spectating while waiting to respawn and free spectator flight after elimination, with **Z / X** target switching.
+- Backport rotated gravity, collision, jumping, swimming and diving for World Tilt, alongside the editable time fields and menu fixes.
+- Correct background blur ordering on 1.21.1–1.21.5 so menu text and panels remain sharp.
+- Fix legacy keybinding conflicts so spectator switching still works when Minecraft's default creative-toolbar shortcuts share the same key.
+- Hide the vanilla locator-bar setting before Minecraft 1.21.6, where that feature does not exist. Supply drops use a trident instead of the diamond spear on versions before 1.21.11; copper equipment is only considered where Minecraft includes it.
+- Expand the build matrix, release packaging and English-first documentation to all fifteen targets.
+
+**Installation:** use the file for your exact Minecraft version on both the client and server, plus matching **Fabric API** and **Fabric Loader 0.19.3+**. Minecraft 1.21.x requires **Java 21**; 26.x requires **Java 25**. Remove older copies of this mod. These downloads do not allow clients and servers on different Minecraft versions to join each other.
+
 ## 1.4.5
 
 - Add separate Fabric builds for Minecraft 1.21.11, 26.1, 26.1.1, 26.1.2 and 26.2; Java 21 for 1.21.11 and Java 25 for 26.x.

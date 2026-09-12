@@ -1,0 +1,1 @@
+package com.xiaoming.hunterwildcard.test.harness; public interface FabricClientGameTest {void runTest(ClientGameTestContext context);}

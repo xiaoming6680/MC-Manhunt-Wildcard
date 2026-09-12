@@ -4,7 +4,7 @@ English · [简体中文](README.zh-CN.md) · [Modrinth](https://modrinth.com/mo
 
 **Hunt, escape, and adapt to random rules that change the chase.**
 
-Minecraft `1.21.11–26.2` · Fabric · 28 wildcards · English / Chinese
+Minecraft `1.21.1–26.2` · Fabric · 28 wildcards · English / Chinese
 
 ![Manhunt Wildcard](Manhunt-Wildcard.jpg)
 
@@ -16,17 +16,29 @@ Install the matching mod build on the client and server, together with Fabric AP
 
 | Minecraft | Java | Release file |
 | --- | --- | --- |
-| 1.21.11 | 21+ | `MC-Manhunt-Wildcard-1.4.5-mc1.21.11.jar` |
-| 26.1 | 25+ | `MC-Manhunt-Wildcard-1.4.5-mc26.1.jar` |
-| 26.1.1 | 25+ | `MC-Manhunt-Wildcard-1.4.5-mc26.1.1.jar` |
-| 26.1.2 | 25+ | `MC-Manhunt-Wildcard-1.4.5-mc26.1.2.jar` |
-| 26.2 | 25+ | `MC-Manhunt-Wildcard-1.4.5-mc26.2.jar` |
+| 1.21.1 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.1.jar` |
+| 1.21.2 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.2.jar` |
+| 1.21.3 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.3.jar` |
+| 1.21.4 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.4.jar` |
+| 1.21.5 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.5.jar` |
+| 1.21.6 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.6.jar` |
+| 1.21.7 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.7.jar` |
+| 1.21.8 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.8.jar` |
+| 1.21.9 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.9.jar` |
+| 1.21.10 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.10.jar` |
+| 1.21.11 | 21+ | `MC-Manhunt-Wildcard-1.4.6-mc1.21.11.jar` |
+| 26.1 | 25+ | `MC-Manhunt-Wildcard-1.4.6-mc26.1.jar` |
+| 26.1.1 | 25+ | `MC-Manhunt-Wildcard-1.4.6-mc26.1.1.jar` |
+| 26.1.2 | 25+ | `MC-Manhunt-Wildcard-1.4.6-mc26.1.2.jar` |
+| 26.2 | 25+ | `MC-Manhunt-Wildcard-1.4.6-mc26.2.jar` |
 
 Each file supports its listed stable version. Download from [Modrinth](https://modrinth.com/mod/manhunt-wildcard/versions) or [GitHub Releases](https://github.com/xiaoming6680/MC-Manhunt-Wildcard/releases). See [Building](docs/BUILDING.md) for source builds.
 
-The current mod version is `1.4.5`. Install this same JAR on both sides and remove old copies. New settings use protocol v3 and cannot be mixed with builds using older protocols. Incompatible peers receive an explicit update message.
+All 15 downloads contain the same wildcard lineup. Before Minecraft 1.21.6 there is no vanilla locator bar, so its setting is hidden. Before 1.21.11, supply drops use a trident instead of the diamond spear; copper armor applies only on versions that include it. Each client and server must run the same Minecraft version.
 
-1. Place the matching `MC-Manhunt-Wildcard-1.4.5-mc<game-version>.jar` in the instance's `mods/` folder.
+The current mod version is `1.4.6`. Install this same JAR on both sides and remove old copies. New settings use protocol v3 and cannot be mixed with builds using older protocols. Incompatible peers receive an explicit update message.
+
+1. Place the matching `MC-Manhunt-Wildcard-1.4.6-mc<game-version>.jar` in the instance's `mods/` folder.
 2. Enter a world, press **M**, and join the red Hunters or blue Runners.
 3. An operator chooses a preset or adjusts rules, clicks **Apply**, then starts the round once both sides have players.
 

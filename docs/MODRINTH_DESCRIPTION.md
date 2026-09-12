@@ -43,9 +43,9 @@ Press **M** to join a team, see the match status, or browse the rules. Operators
 3. Enter the world, press **M**, and join Hunters or Runners.
 4. An operator chooses rules, clicks **Apply**, and starts the round when both sides have players.
 
-**Supported stable versions:** 1.21.11, 26.1, 26.1.1, 26.1.2 and 26.2 (Fabric). Use Fabric Loader 0.19.3 or newer.
+**Supported stable versions:** 1.21.1–1.21.11, 26.1, 26.1.1, 26.1.2 and 26.2 (Fabric). Use Fabric Loader 0.19.3 or newer.
 
-Use **Java 21** for Minecraft 1.21.11 and **Java 25** for 26.x. Check the version entry for supported Minecraft versions; one file is not automatically compatible with every version.
+Use **Java 21** for Minecraft 1.21.x and **Java 25** for 26.x. Check the version entry for supported Minecraft versions; one file is not automatically compatible with every version. All fifteen builds retain the same 28 wildcards. The locator-bar setting is available from 1.21.6; supply drops use a trident instead of a diamond spear before 1.21.11.
 
 **Controls:** M — menu · H — status HUD · Z / X — spectator target · compass right-click — target selection · sneak + compass right-click — cycle target. Keys can be rebound.
 
@@ -65,11 +65,11 @@ Manhunt Wildcard 将 Minecraft 猎人追逃变成可配置的多人游戏，加�
 
 ### 每一轮追逐都有变数
 
-- **地动山摇：**重力转向侧面，镜头、碰撞与操作随之变化，可以在墙上行走和跳跃。
-- **后室！：**双方进入黄色迷宫，在时限内寻找假地板出口。
-- **传送门、空间错位：**成对传送或随机交换位置，改变追逐局势。
-- **按键错乱：**受击后移动按键重新排列。
-- **背水一战：**三颗心及以下时，命中的攻击致命。
+- **地动山摇**：重力转向侧面，镜头、碰撞与操作随之变化，可以在墙上行走和跳跃。
+- **后室！**：双方进入黄色迷宫，在时限内寻找假地板出口。
+- **传送门、空间错位**：成对传送或随机交换位置，改变追逐局势。
+- **按键错乱**：受击后移动按键重新排列。
+- **背水一战**：三颗心及以下时，命中的攻击致命。
 - 还有**珍珠狂潮、补给空投、连锁挖掘、迷你玩家**等外卡。
 
 可以设置固定或随机抽取时间、单独开关每张外卡并调整参数。想玩传统规则？选择**经典追逃**预设，关闭全部外卡。
@@ -92,13 +92,13 @@ Manhunt Wildcard 将 Minecraft 猎人追逃变成可配置的多人游戏，加�
 3. 进入世界按 **M**，加入猎人或逃亡者。
 4. 管理员调整规则、点击**应用**，双方有人后开始游戏。
 
-**支持的正式版本：**1.21.11、26.1、26.1.1、26.1.2、26.2（Fabric），建议使用 Fabric Loader 0.19.3 或更新版本。
+**支持的正式版本**：1.21.1–1.21.11、26.1、26.1.1、26.1.2、26.2（Fabric），建议使用 Fabric Loader 0.19.3 或更新版本。
 
-Minecraft 1.21.11 使用 **Java 21**，26.x 使用 **Java 25**。具体兼容版本以下载条目为准，不能将一个文件直接用于全部游戏版本。
+Minecraft 1.21.x 使用 **Java 21**，26.x 使用 **Java 25**。具体兼容版本以下载条目为准，不能将一个文件直接用于全部游戏版本。十五个构建均保留 28 张外卡；原版定位栏设置仅在 1.21.6 起提供，1.21.11 之前补给中的钻石矛改用三叉戟。
 
-**按键：**M 打开菜单 · H 切换状态 HUD · Z / X 切换观战目标 · 指南针右键选择目标 · 潜行右键循环目标。按键均可重新绑定。
+**按键**：M 打开菜单 · H 切换状态 HUD · Z / X 切换观战目标 · 指南针右键选择目标 · 潜行右键循环目标。按键均可重新绑定。
 
-**配置：**服务端规则为 `config/hunterwildcard.json`，本地显示偏好为 `config/hunterwildcard-ui.json`。管理员还可使用 `/hw start`、`/hw stop`、`/hw config reload` 和 `/hw wildcard test <id>`。
+**配置**：服务端规则为 `config/hunterwildcard.json`，本地显示偏好为 `config/hunterwildcard-ui.json`。管理员还可使用 `/hw start`、`/hw stop`、`/hw config reload` 和 `/hw wildcard test <id>`。
 
 每次成功开局都会重置**全部在线玩家**的成就进度，包括旁观者。更新保留已有规则值，新配置项使用默认值。
 

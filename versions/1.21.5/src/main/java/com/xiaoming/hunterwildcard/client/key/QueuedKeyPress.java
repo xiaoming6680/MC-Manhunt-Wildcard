@@ -1,0 +1,1 @@
+package com.xiaoming.hunterwildcard.client.key; public interface QueuedKeyPress { void hunterwildcard$queuePress(); }
