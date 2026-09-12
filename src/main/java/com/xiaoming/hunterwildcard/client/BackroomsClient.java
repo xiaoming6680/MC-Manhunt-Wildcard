@@ -26,7 +26,7 @@ public final class BackroomsClient {
     private static final double ARRIVAL_CEILING_BLOCKS = 0.75D;
     private static final int ARRIVAL_HOLD_TICKS = 3;
     private static final int ARRIVAL_EASE_TICKS = 8;
-    private static final float AMBIENCE_VOLUME = 0.2F;
+    private static final float AMBIENCE_VOLUME = 0.1F;
     /** The client stops every sound while switching dimension; wait for that to pass before starting ours. */
     private static final int AMBIENCE_START_DELAY_TICKS = 20;
     private static final int AMBIENCE_FADE_TICKS = 40;
